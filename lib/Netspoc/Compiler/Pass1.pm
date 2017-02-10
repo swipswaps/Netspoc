@@ -7156,11 +7156,13 @@ sub build_rule_tree {
         }
     }
 
-    # Insert $simple_tree into $rule_tree.
-    if ($simple_tree) {
+    # Only insert $simple_tree into $rule_tree, if any rules have been
+    # added to $rule_tree.
+    if ($rule_tree and $simple_tree) {
         $rule_tree->{''}->{''}->{$prt_ip} = $simple_tree;
+        $simple_tree = undef;
     }
-    return($rule_tree, $count);
+    return($rule_tree, $simple_tree, $count);
 }
 
 # Derive reduced {local_up} relation from {up} relation between protocols.
@@ -7362,38 +7364,7 @@ sub find_redundant_rules {
         my $src_range = $ref2prt{$src_range_ref};
         while (1) {
          if (my $cmp_hash = $cmp_hash->{$src_range}) {
-          while (my ($src_ref, $chg_hash) = each %$chg_hash) {
-           my $src = $ref2obj{$src_ref};
-           while (1) {
-            if (my $cmp_hash = $cmp_hash->{$src}) {
-             while (my ($dst_ref, $chg_hash) = each %$chg_hash) {
-              my $dst = $ref2obj{$dst_ref};
-              while (1) {
-               if (my $cmp_hash = $cmp_hash->{$dst}) {
-                for my $chg_rule (values %$chg_hash) {
-                 my $prt = $chg_rule->{prt};
-                 while (1) {
-                  if (my $cmp_rule = $cmp_hash->{$prt}) {
-                   if ($cmp_rule ne $chg_rule and
-                       ($cmp_rule->{log} || '') eq ($chg_rule->{log} || ''))
-                   {
-                    collect_redundant_rules($chg_rule, $cmp_rule);
-
-                    # Count each redundant rule only once.
-                    $count++ if not $chg_rule->{redundant}++;
-                   }
-                  }
-                  $prt = $prt->{local_up} or last;
-                 }
-                }
-               }
-               $dst = $dst->{up} or last;
-              }
-             }
-            }
-            $src = $src->{up} or last;
-           }
-          }
+          $count += simple_find_redundant_rules($cmp_hash, $chg_hash);
          }
          $src_range = $src_range->{up} or last;
         }
@@ -7406,6 +7377,46 @@ sub find_redundant_rules {
    }
    $stateless or last;
    $stateless = '';
+  }
+ }
+ return $count;
+}
+
+# Operates on simple rule tree,
+# filled only with attributes {src}, {dst} and {prt}.
+sub simple_find_redundant_rules {
+ my ($cmp_hash, $chg_hash) = @_;
+ my $count = 0;
+ while (my ($src_ref, $chg_hash) = each %$chg_hash) {
+  my $src = $ref2obj{$src_ref};
+  while (1) {
+   if (my $cmp_hash = $cmp_hash->{$src}) {
+    while (my ($dst_ref, $chg_hash) = each %$chg_hash) {
+     my $dst = $ref2obj{$dst_ref};
+     while (1) {
+      if (my $cmp_hash = $cmp_hash->{$dst}) {
+       for my $chg_rule (values %$chg_hash) {
+        my $prt = $chg_rule->{prt};
+        while (1) {
+         if (my $cmp_rule = $cmp_hash->{$prt}) {
+          if ($cmp_rule ne $chg_rule and
+              ($cmp_rule->{log} || '') eq ($chg_rule->{log} || ''))
+          {
+           collect_redundant_rules($chg_rule, $cmp_rule);
+
+           # Count each redundant rule only once.
+           $count++ if not $chg_rule->{redundant}++;
+          }
+         }
+         $prt = $prt->{local_up} or last;
+        }
+       }
+      }
+      $dst = $dst->{up} or last;
+     }
+    }
+   }
+   $src = $src->{up} or last;
   }
  }
  return $count;
@@ -7446,11 +7457,17 @@ sub check_expanded_rules {
 
             my $expanded_rules = expand_rules($rules);
             $count += @$expanded_rules;
-            my ($rule_tree, $deleted) = build_rule_tree($expanded_rules);
+            my ($rule_tree, $simple_tree, $deleted) = 
+                build_rule_tree($expanded_rules);
             $dcount += $deleted;
             set_local_prt_relation($rules);
-            $rcount += find_redundant_rules($rule_tree, $rule_tree);
-
+            if ($rule_tree) {
+                $rcount += find_redundant_rules($rule_tree, $rule_tree);
+            }
+            else {
+                $rcount += 
+                    simple_find_redundant_rules($simple_tree, $simple_tree);
+            }
         }
     }
     show_duplicate_rules();
