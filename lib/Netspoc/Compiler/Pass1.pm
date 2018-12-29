@@ -8472,19 +8472,19 @@ sub check_interfaces_with_dynamic_nat {
 }
 
 #############################################################################
-# Returns: $partitions: Lookup hash with domains as keys and partition ID
-#              as values.
+# Purpose: Sets attribute {partition} with partition ID as value
+#          for each domain.
 # Comment: NAT partitions arise, if parts of the topology are strictly
 #          separated by crypto interfaces or partitioned toplology.
-sub find_nat_partitions {
+sub mark_nat_partitions {
     my ($natdomains) = @_;
     my %partitions;
     my $mark_nat_partition = sub {
         my ($domain, $mark) = @_;
-        return if $partitions{$domain};
+        return if $domain->{partition};
 
 #        debug "$mark $domain->{name}";
-        $partitions{$domain} = $mark;
+        $domain->{partition} = $mark;
         for my $router (@{ $domain->{routers} }) {
             for my $out_domain (@{ $router->{nat_domains} }) {
                 next if $out_domain eq $domain;
@@ -8497,21 +8497,18 @@ sub find_nat_partitions {
         $mark++;
         $mark_nat_partition->($domain, $mark);
     }
-    return \%partitions;
 }
 #############################################################################
 # Returns:   $partition2tags: Lookup hash storing for every partition ID
 #                the NAT tags used within the partition.
-# Parameter: $partitions: Lookup hash with domains as keys and partition ID
-#                as values.
-#            $natdomains: List of all NAT domains.
+# Parameter: $natdomains: List of all NAT domains.
 # Comment:   NAT tags only used in one partition must not be included in other
 #            partitions no_nat_set.
 sub map_partitions_to_NAT_tags {
-    my ($partitions, $natdomains) = @_;
+    my ($natdomains) = @_;
     my %partition2tags;
     for my $domain (@$natdomains) {
-        my $mark = $partitions->{$domain};
+        my $mark = $domain->{partition};
         for my $zone (@{ $domain->{zones} }) {
             for my $network (@{ $zone->{networks} }) {
                 my $nat_hash = $network->{nat} or next;
@@ -8532,13 +8529,13 @@ sub map_partitions_to_NAT_tags {
 #           reduces memory requirements.
 sub invert_nat_sets {
     my ($natdomains) = @_;
-    my $partitions = find_nat_partitions($natdomains);
-    my $partition2tags = map_partitions_to_NAT_tags($partitions, $natdomains);
+    mark_nat_partitions($natdomains);
+    my $partition2tags = map_partitions_to_NAT_tags($natdomains);
 
     # Invert {nat_set} to {no_nat_set}
     for my $domain (@$natdomains) {
         my $nat_set     = delete $domain->{nat_set};
-        my $mark        = $partitions->{$domain};
+        my $mark        = $domain->{partition};
         my $all_nat_set = $partition2tags->{$mark} ||= {};
 
 #        debug "$mark $domain->{name} all: ", join(',', keys %$all_nat_set);
@@ -9623,6 +9620,7 @@ my $network_00 = new(
     mask             => get_zero_ip(),
     is_aggregate     => 1,
     has_other_subnet => 1,
+    default_addr     => '0.0.0.0/0',
     );
 
 my $network_00_v6 = new(
@@ -9632,6 +9630,7 @@ my $network_00_v6 = new(
     mask             => get_zero_ip(1),
     is_aggregate     => 1,
     has_other_subnet => 1,
+    default_addr     => '::/0',
     );
 
 sub get_network_00 {
@@ -16601,15 +16600,17 @@ my $permit_any6_rule;
 sub get_multicast_objects {
     my ($info, $ipv6) = @_;
     my $ip_list;
+    my $prefix_len;
     if ($ipv6) {
         $ip_list = $info->{mcast6};
+        $prefix_len = 128;
     }
     else {
         $ip_list = $info->{mcast};
+        $prefix_len = 32;
     }
     return [
-        map { my $ip = ip2bitstr($_);
-              new('Network', ip => $ip, mask => get_host_mask($ip)) } @$ip_list
+        map { new('Network', default_addr => "$_/$prefix_len") } @$ip_list
         ];
 }
 
@@ -18207,7 +18208,139 @@ sub print_prt {
     return(join(' ', @result));
 }
 
-my %nat2obj2address;
+# Store textual IP/prefix_len for each network, host and interface
+# for different NAT domains.
+# Typically each network has only one or few different addresses.
+# Store that address which is used in most NAT domains in attribute 
+# {default_addr}.
+# Store other addresses in {nat_addr}, separately for each no_nat_set.
+sub setup_printable_addresses {
+    my ($nat_domains) = @_;
+    for my $network (@networks) {
+        next if $network->{ip} =~ /^(?:unnumbered|tunnel)$/;
+        my $part = $network->{zone}->{nat_domain}->{partition};
+        my @domains = grep { $_->{partition} == $part } @$nat_domains;
+        my $max_tag = '';
+        my $nat_hash = $network->{nat};
+        if ($nat_hash) {
+            my $all_nat = 0;
+            my $max_nat = 0;
+            for my $tag (sort keys %$nat_hash) {
+                my $nat = $nat_hash->{$tag};
+                next if $nat->{hidden};
+                my @active = 
+                    grep { not $_->{no_nat_set}->{$tag} } @domains;
+                $all_nat += @active;
+                if (@active > $max_nat) {
+                    $max_nat = @active;
+                    $max_tag = $tag;
+                }
+            }
+            my $no_nat = @domains - $all_nat;
+            if ($no_nat >= $max_nat) {
+                $max_tag = '';
+            }
+        }
+        my $orig_addr = full_prefix_code([@{$network}{qw(ip mask)}]);
+        my $set_orig_obj = sub {
+            my ($no_nat_set) = @_;
+            my $addr;
+            for my $obj (@{$network->{subnets}}, @{$network->{interfaces}}) {
+                my $ip = $obj->{ip};
+                if ($ip eq 'negotiated') {
+                    $addr = $orig_addr;
+                }
+                else {
+                    my $mask = $obj->{mask} // get_host_mask($ip);
+                    $addr = full_prefix_code([$ip, $mask]);
+                }
+                if ($no_nat_set) {
+                    $obj->{nat_addr}->{$no_nat_set} = $addr;
+                }
+                else {
+                    $obj->{default_addr} = $addr;
+                }
+            }
+        };
+        my $set_nat_obj = sub {
+            my ($no_nat_set, $tag, $nat, $nat_addr) = @_;
+            my $addr;
+            for my $obj (@{$network->{subnets}}, @{$network->{interfaces}}) {
+                my $ip = $obj->{ip};
+                if ($ip eq 'negotiated') {
+                    $addr = $nat_addr;
+                }
+                elsif ($nat->{dynamic}) {
+                    my $nat_tag = $nat->{nat_tag};
+                    if (my $ip = $obj->{nat}->{$nat_tag}) {
+
+                        # Single static NAT IP for this object.
+                        my $mask = get_host_mask($ip);
+                        $addr = full_prefix_code([$ip, $mask]);
+                    }
+                    else {
+                        $addr = $nat_addr;
+                    }
+                }
+                else {
+                    my $mask = $obj->{mask} // get_host_mask($ip);
+                    
+                    # Take higher bits from network NAT, lower bits
+                    # from original IP.
+                    my $nat_ip = $nat->{ip} | $ip & ~ $nat->{mask};
+                    $addr = full_prefix_code([$nat_ip, $mask]);
+                }
+                if ($no_nat_set) {
+                    $obj->{nat_addr}->{$no_nat_set} = $addr;
+                }
+                else {
+                    $obj->{default_addr} = $addr;
+                }
+            }
+        };
+        my $default_addr;
+        if ($max_tag) {
+            my $max_nat = $nat_hash->{$max_tag};
+            $default_addr = full_prefix_code([@{$max_nat}{qw(ip mask)}]);
+            $set_nat_obj->(undef, $max_tag, $max_nat, $default_addr);
+            @domains = grep { $_->{no_nat_set}->{$max_tag} } @domains;
+        }
+        else {
+            $default_addr = $orig_addr;
+            $set_orig_obj->(undef);
+        }
+        $network->{default_addr} = $default_addr;
+        if ($nat_hash) {
+            my $nat_attr = $network->{nat_addr} = {};
+            for my $tag (keys %$nat_hash) {
+                next if $tag eq $max_tag;
+                my $nat = $nat_hash->{$tag};
+                next if $nat->{hidden};
+                my $active;
+                for my $domain (@domains) {
+                    my $no_nat_set = $domain->{no_nat_set};
+                    next if $no_nat_set->{$tag};
+                    my $addr = full_prefix_code([@{$nat}{qw(ip mask)}]);
+                    $nat_attr->{$no_nat_set} = $addr;
+                    $set_nat_obj->($no_nat_set, $tag, $nat, $addr);
+                }
+            }
+
+            # Find NAT domains, where original address is visible,
+            # i.e. all NAT tags are set in no_nat_set.
+            if ($max_tag) {
+                for my $domain (@domains) {
+                    my $no_nat_set = $domain->{no_nat_set};
+                    my $inactive = grep { $no_nat_set->{$_} } keys %$nat_hash;
+                    if ($inactive == keys %$nat_hash) {
+                        $nat_attr->{$no_nat_set} = $orig_addr;
+                        $set_orig_obj->($no_nat_set);
+                    }
+                }
+            }
+        }                    
+    }
+}
 
 sub print_acls {
     my ($vrf_members, $fh) = @_;
@@ -18264,17 +18397,14 @@ sub print_acls {
             my %dst_obj;
 
             my $no_nat_set = delete $acl->{no_nat_set};
-            my $addr_cache = $nat2obj2address{$no_nat_set} ||= {};
             my $dst_no_nat_set = delete $acl->{dst_no_nat_set} || $no_nat_set;
-            my $dst_addr_cache = $nat2obj2address{$dst_no_nat_set} ||= {};
             my $protect_self = delete $acl->{protect_self};
             if ($need_protect and $protect_self) {
                 $acl->{need_protect} = [
 
                     # Remove duplicate addresses from redundancy interfaces.
                     unique
-                    map({ $addr_cache->{$_} ||=
-                              full_prefix_code(address($_, $no_nat_set)) }
+                    map({ $_->{nat_addr}->{$no_nat_set} || $_->{default_addr} }
                         @$need_protect) ];
             }
 
@@ -18387,14 +18517,14 @@ sub print_acls {
                         $new_rule->{opt_secondary} = 1;
                     }
                     $new_rule->{src} =
-                        [ map { $addr_cache->{$_} ||=
-                                    full_prefix_code(address($_, $no_nat_set))
+                        [ map { 
+                            $_->{nat_addr}->{$no_nat_set} || $_->{default_addr} 
                           }
                           @{ $rule->{src} } ];
                     $new_rule->{dst} =
-                        [ map { $dst_addr_cache->{$_} ||=
-                                    full_prefix_code(address($_,
-                                                             $dst_no_nat_set))
+                        [ map {  
+                            $_->{nat_addr}->{$dst_no_nat_set} 
+                            || $_->{default_addr}
                           }
                           @{ $rule->{dst} } ];
                     $new_rule->{prt} =
@@ -18425,18 +18555,20 @@ sub print_acls {
                 $acl->{opt_networks} = [
                     sort
                     map {   $dst_obj{$_}
-                          ? full_prefix_code(address($_, $dst_no_nat_set))
-                          : ($addr_cache->{$_} ||=
-                             full_prefix_code(address($_, $no_nat_set))) }
+                          ? $_->{nat_addr}->{$dst_no_nat_set} 
+                            || $_->{default_addr}
+                          : $_->{nat_addr}->{$no_nat_set} || $_->{default_addr}
+                    }
                     values %opt_addr ];
             }
             if (values %no_opt_addrs) {
                 $acl->{no_opt_addrs} = [
                     sort
                     map {   $dst_obj{$_}
-                          ? full_prefix_code(address($_, $dst_no_nat_set))
-                          : ($addr_cache->{$_} ||=
-                             full_prefix_code(address($_, $no_nat_set))) }
+                          ? $_->{nat_addr}->{$dst_no_nat_set} 
+                            || $_->{default_addr}
+                          : $_->{nat_addr}->{$no_nat_set} || $_->{default_addr} 
+                    }
                     values %no_opt_addrs ];
             }
             push @acl_list, $acl;
@@ -18790,7 +18922,6 @@ sub init_global_vars {
     @duplicate_rules    = @redundant_rules = ();
     %missing_supernet   = ();
     %known_log          = ();
-    %nat2obj2address    = ();
     init_protocols();
 }
 
@@ -18855,6 +18986,7 @@ sub compile {
             find_active_routes();
             gen_reverse_rules();
             if ($out_dir) {
+                setup_printable_addresses($natdomains);
                 mark_secondary_rules();
                 rules_distribution();
                 check_output_dir($out_dir);
