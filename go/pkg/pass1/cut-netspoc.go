@@ -68,6 +68,7 @@ type hasSrc interface {
 var srcCode = make(map[hasSrc]string)
 var srcIndex = make(map[hasSrc]int)
 
+/*
 func getSource(m xMap) {
 	global := []string{
 		"aggregates", "areas",
@@ -88,7 +89,7 @@ func getSource(m xMap) {
 		}
 	}
 }
-
+*/
 func changeAttributeSrcCodeAt(attr string, ob hasSrc, subName, replace string) {
 	code := srcCode[ob]
 	input := code
@@ -361,9 +362,9 @@ func markRulesPath(p pathRules) {
 	}
 }
 
-func CutNetspoc(m xMap) {
+func CutNetspoc() {
 
-	getSource(m)
+	//	getSource(m)
 
 	MarkDisabled()
 	SetZone()
@@ -969,10 +970,10 @@ func CutNetspoc(m xMap) {
 	for _, x := range groups {
 		add(x)
 	}
-	for _, x := range protocols {
+	for _, x := range symTable.protocol {
 		add(x)
 	}
-	for _, x := range protocolGroups {
+	for _, x := range symTable.protocolgroup {
 		add(x)
 	}
 	for _, x := range isakmpMap {

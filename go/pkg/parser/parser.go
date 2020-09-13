@@ -56,7 +56,7 @@ func (p *parser) nextMulti() {
 }
 
 func (p *parser) syntaxErr(format string, args ...interface{}) {
-	p.scanner.SyntaxErr(format, args...)
+	p.scanner.SyntaxErr(p.pos, format, args...)
 }
 
 func (p *parser) expect(tok string) int {
@@ -109,6 +109,7 @@ func (p *parser) checkPos(tok string) int {
 func (p *parser) getNonSep() string {
 	if p.isSep {
 		p.syntaxErr("Unexpected separator '%s'", p.tok)
+		// ToDo: What happens if at EOF?
 	}
 	return p.tok
 }
@@ -472,7 +473,7 @@ func (p *parser) valueList(
 
 func (p *parser) complexValue(
 	nextSpecial func(*parser)) ([]*ast.Attribute, int) {
-	var list []*ast.Attribute
+	list := make([]*ast.Attribute, 0)
 	var end int
 	for {
 		if end = p.checkPos("}"); end >= 0 {

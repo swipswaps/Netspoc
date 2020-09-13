@@ -187,7 +187,7 @@ func propagateOwners() {
 
 	// Check owner with attribute showAll.
 	var errList stringList
-	for _, o := range owners {
+	for _, o := range symTable.owner {
 		if !o.showAll {
 			continue
 		}
@@ -488,7 +488,7 @@ func CheckServiceOwner() {
 	// Show unused owners.
 	if printType := conf.Conf.CheckUnusedOwners; printType != "" {
 		var unused stringList
-		for _, o := range owners {
+		for _, o := range symTable.owner {
 			if !o.isUsed {
 				unused.push(o.name)
 			}

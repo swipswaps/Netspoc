@@ -60,7 +60,7 @@ foo:x =
 END
 
 $out = <<'END';
-Syntax error: Unknown global definition at line 1 of INPUT, near "foo:x<--HERE--> ="
+Syntax error: Unknown global definition at line 1 of INPUT, near "--HERE-->foo:x"
 END
 
 test_err($title, $in, $out);
@@ -216,7 +216,7 @@ group:g1 = interface:r1.[ ;
 END
 
 $out = <<'END';
-Syntax error: Expected [auto|all] at line 1 of INPUT, near "interface:r1.[ ;<--HERE-->"
+Syntax error: Expected [auto|all] at line 1 of INPUT, near "interface:r1.[ --HERE-->;"
 END
 
 test_err($title, $in, $out);
@@ -230,7 +230,7 @@ group:g1@2 = ;
 END
 
 $out = <<'END';
-Syntax error: Invalid token at line 1 of INPUT, near "group:g1@2<--HERE--> = ;"
+Syntax error: Invalid token at line 1 of INPUT, near "--HERE-->group:g1@2"
 END
 
 test_err($title, $in, $out);
@@ -244,7 +244,7 @@ group:g1 = interface:;
 END
 
 $out = <<'END';
-Syntax error: Interface name expected at line 1 of INPUT, near "interface:<--HERE-->;"
+Syntax error: Interface name expected at line 1 of INPUT, near "group:g1 = --HERE-->interface:"
 END
 
 test_err($title, $in, $out);
@@ -258,7 +258,7 @@ group:g1 = interface:r1.;
 END
 
 $out = <<'END';
-Syntax error: Interface name expected at line 1 of INPUT, near "interface:r1.;<--HERE-->"
+Syntax error: Interface name expected at line 1 of INPUT, near "interface:r1.--HERE-->;"
 END
 
 test_err($title, $in, $out);
@@ -272,7 +272,7 @@ group:g1 = interface:r1.n1@vrf2;
 END
 
 $out = <<'END';
-Syntax error: Interface name expected at line 1 of INPUT, near "interface:r1.n1@vrf2;<--HERE-->"
+Syntax error: Interface name expected at line 1 of INPUT, near "interface:r1.n1@vrf2--HERE-->;"
 END
 
 test_err($title, $in, $out);
@@ -286,7 +286,7 @@ group:g1 = interface:r1.n1.1.2;
 END
 
 $out = <<'END';
-Syntax error: Interface name expected at line 1 of INPUT, near "interface:r1.n1.1.2;<--HERE-->"
+Syntax error: Interface name expected at line 1 of INPUT, near "interface:r1.n1.1.2--HERE-->;"
 END
 
 test_err($title, $in, $out);
@@ -774,7 +774,7 @@ service:s1 = {
 END
 
 $out = <<'END';
-Syntax error: Unexpected separator ',' at line 2 of INPUT, near "service:s2,,<--HERE-->;"
+Syntax error: Unexpected separator ',' at line 2 of INPUT, near "service:s2,--HERE-->,;"
 END
 
 test_err($title, $in, $out);
@@ -790,7 +790,7 @@ service:s1 = {
 END
 
 $out = <<'END';
-Syntax error: Expected '=' at line 2 of INPUT, near "src<--HERE--> = user"
+Syntax error: Expected '=' at line 2 of INPUT, near "permit --HERE-->src"
 END
 
 test_err($title, $in, $out);
@@ -1152,7 +1152,7 @@ $title = 'Sort successive vip interfaces';
 
 $in = <<'END';
 router:u1 = {
- interface:n7 = { ip = 10.1.1.7; owner = o1; }
+ interface:n7 = { owner = o1; ip = 10.1.1.7; }
  interface:lo = { ip = 10.1.4.128; owner = o2; vip; }
  interface:n1 = { ip = 10.1.1.1; owner = o1; vip; }
  interface:unnum = { unnumbered; }
@@ -1169,7 +1169,7 @@ END
 
 $out = <<'END';
 router:u1 = {
- interface:n7    = { ip = 10.1.1.7; owner = o1; }
+ interface:n7    = { owner = o1; ip = 10.1.1.7; }
  interface:n1    = { ip = 10.1.1.1; owner = o1; vip; }
  interface:lo    = { ip = 10.1.4.128; owner = o2; vip; }
  interface:unnum = { unnumbered; }
@@ -1325,7 +1325,7 @@ protocol:p = tcp
 END
 
 $out = <<'END';
-Syntax error: Expected ';' at line 2 of INPUT, at EOF
+Syntax error: Expected ';' at line 1 of INPUT, at EOF
 END
 
 test_err($title, $in, $out);

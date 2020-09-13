@@ -608,7 +608,7 @@ network:n1/left = { ip = 10.1.1.0/24; }
 router:bridge = {
  model = ASA;
  managed;
- interface:n1 = { ip = 10.1.1.1; hardware = device; }
+ interface:n1 = { ip = 10.1.1.1; hardware = device; loopback; }
  interface:n1/left  = { hardware = left; }
  interface:n1/right = { hardware = right; }
 }

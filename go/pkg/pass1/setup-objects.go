@@ -1,0 +1,2466 @@
+package pass1
+
+import (
+	"bytes"
+	"fmt"
+	"github.com/hknutzen/Netspoc/go/pkg/ast"
+	"github.com/hknutzen/Netspoc/go/pkg/filetree"
+	"github.com/hknutzen/Netspoc/go/pkg/parser"
+	"net"
+	"regexp"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var symTable *symbolTable
+
+func ReadNetspoc(path string) {
+	toplevel := ParseFiles(path)
+	checkDuplicate(toplevel)
+	sym := createSymbolTable()
+	setupObjects(toplevel, sym)
+	symTable = sym
+	networks = sym.network
+	routers = sym.router
+	routers6 = sym.router6
+	services = sym.service
+}
+
+func ParseFiles(path string) []ast.Toplevel {
+	var result []ast.Toplevel
+	process := func(input *filetree.Context) {
+		source := []byte(input.Data)
+		nodes := parser.ParseFile(source, input.Path)
+		if input.IPV6 {
+			for _, n := range nodes {
+				n.SetIPV6()
+			}
+		}
+		result = append(result, nodes...)
+	}
+	filetree.Walk(path, process)
+	return result
+}
+
+type symbolTable struct {
+	// Leaf nodes, referencing nothing.
+	isakmp   map[string]*isakmp
+	owner    map[string]*owner
+	protocol map[string]*proto
+	// References protocolgroup, protocol
+	protocolgroup map[string]*protoGroup
+	// References network, owner
+	network   map[string]*network
+	aggregate map[string]*network
+	// References owner
+	host map[string]*host
+	// References host, owner, protocolgroup+
+	router  map[string]*router
+	router6 map[string]*router
+	// References network, owner, crypto, routerIntf(via crypto)
+	routerIntf map[string]*routerIntf
+	// References interface, group+, owner
+	area map[string]*area
+	// References group+, protocolgroup+, owner, service
+	service map[string]*service
+	// References host, network, interface, area, aggregate, group
+	group map[string]*objGroup
+	// References interface, group+
+	pathrestriction map[string]*ast.TopList
+	// References isakmp
+	ipsec map[string]*ipsec
+	// References ipsec
+	crypto map[string]*crypto
+}
+
+func createSymbolTable() *symbolTable {
+	s := new(symbolTable)
+	s.network = make(map[string]*network)
+	s.host = make(map[string]*host)
+	s.router = make(map[string]*router)
+	s.router6 = make(map[string]*router)
+	s.routerIntf = make(map[string]*routerIntf)
+	s.area = make(map[string]*area)
+	s.service = make(map[string]*service)
+	s.protocol = make(map[string]*proto)
+	s.protocolgroup = make(map[string]*protoGroup)
+	s.group = make(map[string]*objGroup)
+	s.pathrestriction = make(map[string]*ast.TopList)
+	s.aggregate = make(map[string]*network)
+	s.owner = make(map[string]*owner)
+	s.crypto = make(map[string]*crypto)
+	s.ipsec = make(map[string]*ipsec)
+	s.isakmp = make(map[string]*isakmp)
+	return s
+}
+
+func setupObjects(l []ast.Toplevel, s *symbolTable) {
+	var networks []*ast.Network
+	var routers []*ast.Router
+	var services []*ast.Service
+	for _, a := range l {
+		typ, name := splitTypedName(a.GetName())
+		switch x := a.(type) {
+		case *ast.Protocol:
+			setupProtocol(x, s)
+		case *ast.Protocolgroup:
+			l := make(stringList, 0, len(x.ValueList))
+			for _, v := range x.ValueList {
+				l.push(v.Value)
+			}
+			s.protocolgroup[name] = &protoGroup{name: a.GetName(), list: l}
+		case *ast.Network:
+			s.network[name] = new(network)
+			networks = append(networks, x)
+		case *ast.Router:
+			routers = append(routers, x)
+		case *ast.Service:
+			s.service[name] = new(service)
+			services = append(services, x)
+		case *ast.TopStruct:
+			switch typ {
+			case "owner":
+				setupOwner(x, s)
+			}
+		case *ast.TopList:
+			switch typ {
+			case "group":
+				s.group[name] = &objGroup{name: a.GetName(), elements: x.Elements}
+			}
+		}
+	}
+	for _, a := range networks {
+		setupNetwork(a, s)
+	}
+	for _, a := range routers {
+		setupRouter(a, s)
+	}
+	for _, a := range services {
+		setupService(a, s)
+	}
+}
+
+func setupProtocol(a *ast.Protocol, s *symbolTable) {
+	name := a.Name
+	v := a.Value
+	l := strings.Split(v, ", ")
+	def := l[0]
+	mod := l[1:]
+	p := getSimpleProtocol(def, a.IPV6, name)
+	p.name = name
+	pName := name[len("protocol:"):]
+	s.protocol[pName] = p
+	addProtocolModifiers(mod, p)
+}
+
+func getSimpleProtocol(def string, v6 bool, ctx string) *proto {
+	p := new(proto)
+	l := strings.Split(def, " ")
+	proto := l[0]
+	nums := l[1:]
+	p.proto = proto
+	switch proto {
+	case "ip":
+		if nums != nil {
+			errMsg("Unexpected details after 'ip' in %s", ctx)
+		}
+	case "tcp", "udp":
+		addPortRanges(nums, p, ctx)
+	case "icmpv6":
+		p.proto = "icmp"
+		addICMPTypeCode(nums, p, ctx)
+		if !v6 {
+			errMsg("Must use 'icmpv6' only with IPv6 in %s", ctx)
+		}
+	case "icmp":
+		addICMPTypeCode(nums, p, ctx)
+		if v6 {
+			errMsg("Must use 'icmp' only with IPv4 in %s", ctx)
+		}
+	case "proto":
+		addProtoNr(nums, p, v6, ctx)
+	default:
+		errMsg("Unknown protocol '%s' in %s", proto, ctx)
+		p.proto = "ip"
+	}
+	return p
+}
+
+func addPortRanges(nums []string, p *proto, ctx string) {
+	switch len(nums) {
+	case 0:
+		p.dst = getRangeProto(1, 65535, p)
+	case 1:
+		p.dst = getRange1(nums[0], p, ctx)
+	case 3:
+		if nums[1] == "-" {
+			p.dst = getRange(nums[0], nums[2], p, ctx)
+		} else if nums[1] == ":" {
+			p.src = getRange1(nums[0], p, ctx)
+			p.dst = getRange1(nums[2], p, ctx)
+		} else {
+			errMsg("Invalid port range in %s", ctx)
+		}
+	case 5:
+		if nums[1] == ":" && nums[3] == "-" {
+			p.src = getRange1(nums[0], p, ctx)
+			p.dst = getRange(nums[2], nums[4], p, ctx)
+		} else if nums[1] == "-" && nums[3] == ":" {
+			p.src = getRange(nums[0], nums[2], p, ctx)
+			p.dst = getRange1(nums[4], p, ctx)
+		} else {
+			errMsg("Invalid port range in %s", ctx)
+		}
+	case 7:
+		if nums[1] == "-" && nums[3] == ":" && nums[5] == "-" {
+			p.src = getRange(nums[0], nums[2], p, ctx)
+			p.dst = getRange(nums[4], nums[6], p, ctx)
+			p.dst = getRange1(nums[4], p, ctx)
+		} else {
+			errMsg("Invalid port range in %s", ctx)
+		}
+	default:
+		errMsg("Invalid port range in %s", ctx)
+	}
+}
+
+func getRange(s1, s2 string, p *proto, ctx string) *proto {
+	n1 := getPort(s1, ctx)
+	n2 := getPort(s2, ctx)
+	if n1 > n2 {
+		errMsg("Invalid port range in %s", ctx)
+	}
+	return getRangeProto(n1, n2, p)
+}
+
+func getRange1(s1 string, p *proto, ctx string) *proto {
+	n1 := getPort(s1, ctx)
+	return getRangeProto(n1, n1, p)
+}
+
+func getRangeProto(n1, n2 int, p *proto) *proto {
+	return &proto{name: p.name, proto: p.proto, ports: [2]int{n1, n2}}
+}
+
+func getPort(s, ctx string) int {
+	num, err := strconv.Atoi(s)
+	if err != nil {
+		errMsg("Expected number in %s", ctx)
+		return 0
+	}
+	if num <= 0 {
+		errMsg("Expected port number > 0 in %s", ctx)
+	} else if num >= 65536 {
+		errMsg("Expected port number < 65536 in %s", ctx)
+	}
+	return num
+}
+
+func addICMPTypeCode(nums []string, p *proto, ctx string) {
+	switch len(nums) {
+	case 0:
+		p.icmpType = -1
+		p.icmpCode = -1
+		return
+	case 3:
+		if nums[1] != "/" {
+			errMsg("Expected [TYPE [ / CODE]] in %s", ctx)
+			break
+		}
+		p.icmpCode = getNum256(nums[2], ctx)
+		fallthrough
+	case 1:
+		typ := getNum256(nums[0], ctx)
+		p.icmpType = typ
+		if typ == 0 || typ == 3 || typ == 11 {
+			p.statelessICMP = true
+		}
+	default:
+		errMsg("Expected [TYPE [ / CODE]] in %s", ctx)
+	}
+}
+
+func addProtoNr(nums []string, p *proto, v6 bool, ctx string) {
+	if len(nums) != 1 {
+		errMsg("Expected single protocol number in %s", ctx)
+		return
+	}
+	s := nums[0]
+	switch getNum256(s, ctx) {
+	case 1:
+		if !v6 {
+			errMsg("Must not use 'proto 1', use 'icmp' instead in %s", ctx)
+			return
+		}
+	case 4:
+		errMsg("Must not use 'proto 4', use 'tcp' instead in %s", ctx)
+		return
+	case 17:
+		errMsg("Must not use 'proto 17', use 'udp' instead in %s", ctx)
+		return
+	case 58:
+		if v6 {
+			errMsg("Must not use 'proto 58', use 'icmp6' instead in %s", ctx)
+			return
+		}
+	}
+	p.proto = s
+}
+
+func getNum256(s, ctx string) int {
+	num, err := strconv.Atoi(s)
+	if err != nil {
+		errMsg("Expected number in %s", ctx)
+		return -1
+	}
+	if num <= 0 {
+		errMsg("Expected number > 0 in %s", ctx)
+	} else if num >= 256 {
+		errMsg("Expected number < 256 in %s", ctx)
+	}
+	return num
+}
+
+func addProtocolModifiers(l []string, p *proto) {
+	if len(l) == 0 {
+		return
+	}
+	m := new(modifiers)
+	for _, s := range l {
+		switch s {
+		case "reversed":
+			m.reversed = true
+		case "stateless":
+			m.stateless = true
+		case "oneway":
+			m.oneway = true
+		case "src_net":
+			m.srcNet = true
+		case "dst_net":
+			m.dstNet = true
+		case "overlaps":
+			m.overlaps = true
+		case "no_check_supernet_rules":
+			m.noCheckSupernetRules = true
+		default:
+			errMsg("Unknown modifier '%s' in %s", s, p.name)
+		}
+	}
+	p.modifiers = m
+}
+
+func setupOwner(v *ast.TopStruct, s *symbolTable) {
+	name := v.Name
+	o := new(owner)
+	o.name = name
+	oName := name[len("owner:"):]
+	s.owner[oName] = o
+	if !isSimpleName(oName) {
+		errMsg("Invalid identifier in definition of '%s'", name)
+	}
+	for _, a := range v.Attributes {
+		switch a.Name {
+		case "admins":
+			o.admins = getValueList(a, name)
+		case "watchers":
+			o.watchers = getValueList(a, name)
+		case "show_all":
+			o.showAll = getFlag(a, name)
+			o.showHiddenOwners = true
+		case "only_watch":
+			o.onlyWatch = getFlag(a, name)
+		case "hide_from_outer_owners":
+			o.hideFromOuterOwners = getFlag(a, name)
+		case "show_hidden_owners":
+			o.showHiddenOwners = getFlag(a, name)
+		default:
+			errMsg("Unexpected attribute in %s: %s", name, a.Name)
+		}
+	}
+}
+
+func setupNetwork(v *ast.Network, s *symbolTable) {
+	name := v.Name
+	netName := name[len("network:"):]
+	n := s.network[netName]
+	n.name = name
+	n.ipV6 = v.IPV6
+	i := strings.Index(netName, "/")
+	if i != -1 {
+		n.bridged = true
+	}
+	if i != -1 && !isSimpleName(netName[:i]) || !isSimpleName(netName[i+1:]) {
+		errMsg("Invalid identifier in definition of '%s'", name)
+	}
+	//n.description = v.Description.Text
+	var ldapAppend string
+	for _, a := range v.Attributes {
+		switch a.Name {
+		case "ip":
+			n.ip, n.mask = getIpPrefix(a, v.IPV6, name)
+		case "unnumbered":
+			n.unnumbered = getFlag(a, name)
+		case "has_subnets":
+			n.hasSubnets = getFlag(a, name)
+		case "crosslink":
+			n.crosslink = getFlag(a, name)
+		case "subnet_of":
+			n.subnetOf = getNetworkRef(a, s, name)
+		case "owner":
+			n.owner = getOwnerRef(a, s, name)
+		case "cert_id":
+			n.certId = getSingleValue(a, name)
+		case "ldap_append":
+			ldapAppend = getSingleValue(a, name)
+		case "radius_attributes":
+			n.radiusAttributes = getRadiusAttributes(a, name)
+		case "partition":
+			n.partition = getIdentifier(a, name)
+		case "overlaps", "unknown_owner", "multi_owner", "has_unenforceable":
+			n.attr = addAttr(a, n.attr, name)
+		default:
+			if nat := addNetNat(a, n.nat, v.IPV6, s, name); nat != nil {
+				n.nat = nat
+			} else {
+				errMsg("Unexpected attribute in %s: %s", name, a.Name)
+			}
+		}
+	}
+	checkDuplAttr(v.Attributes, name)
+	// Network name without prefix "network:" is needed to build
+	// name of ID-hosts.
+	for _, a := range v.Hosts {
+		h := setupHost(a, s, n)
+		if h.ldapId != "" {
+			h.ldapId += ldapAppend
+		}
+	}
+
+	// Unnumbered network must not have any other attributes.
+	if n.unnumbered {
+		for _, a := range v.Attributes {
+			switch a.Name {
+			case "crosslink", "unnumbered":
+			default:
+				if strings.HasPrefix("nat:", a.Name) {
+					errMsg("Unnumbered %s must not have nat definition", name)
+				} else {
+					errMsg("Unnumbered %s must not have attribute '%s'",
+						name, a.Name)
+				}
+			}
+		}
+		if len(n.hosts) != 0 {
+			errMsg("Unnumbered %s must not have host definition", name)
+		}
+	} else if n.bridged {
+		for _, h := range n.hosts {
+			if h.ipRange[0] != nil {
+				errMsg("Bridged %s must not have %s with range (not implemented)",
+					name, h.name)
+			}
+		}
+		for _, nat := range n.nat {
+			if !nat.identity {
+				errMsg("Only identity NAT allowed for bridged %s", n.name)
+				break
+			}
+		}
+	} else if n.ip == nil {
+		errMsg("Missing IP address for %s", name)
+	} else {
+		ip := n.ip
+		mask := n.mask
+		for _, h := range n.hosts {
+
+			// Check compatibility of host IP and network IP/mask.
+			if h.ip != nil {
+				if !matchIp(h.ip, ip, mask) {
+					errMsg("IP of %s doesn't match IP/mask of %s", h.name, name)
+				}
+			} else {
+				// Check range.
+				if !(matchIp(h.ipRange[0], ip, mask) &&
+					matchIp(h.ipRange[1], ip, mask)) {
+					errMsg("IP range of %s doesn't match IP/mask of %s",
+						h.name, name)
+				}
+			}
+
+			// Compatibility of host and network NAT will be checked later,
+			// after inherited NAT definitions have been processed.
+		}
+		if n.hosts != nil && n.crosslink {
+			errMsg("Crosslink %s must not have host definitions", name)
+		}
+
+		// Check NAT definitions.
+		for tag, nat := range n.nat {
+			if !nat.dynamic {
+				if bytes.Compare(nat.mask, mask) != 0 {
+					errMsg("Mask for non dynamic nat:%s must be equal to mask of %s",
+						tag, name)
+				}
+			}
+		}
+
+		// Check and mark networks with ID-hosts.
+		ldapCount := 0
+		idHostsCount := 0
+		for _, h := range n.hosts {
+			if h.ldapId != "" {
+				ldapCount++
+				h.id = h.ldapId
+			} else if h.id != "" {
+				idHostsCount++
+			}
+		}
+		if ldapCount > 0 {
+
+			// If one host has ldap_id, all hosts must have ldap_id.
+			if len(n.hosts) != ldapCount {
+				errMsg("All hosts must have attribute 'ldap_id' in %s", name)
+
+				if n.certId != "" {
+					errMsg("Missing attribute 'cert_id' at %s having hosts"+
+						" with attribute 'ldap_id'", name)
+				}
+			}
+
+			// Mark network.
+			n.hasIdHosts = true
+		} else {
+			if ldapAppend != "" {
+				warnMsg("Ignoring 'ldap_append' at %s", name)
+			}
+			if n.certId != "" {
+				n.certId = ""
+				warnMsg("Ignoring 'cert_id' at %s", name)
+			}
+			if idHostsCount > 0 {
+
+				// If one host has ID, all hosts must have ID.
+				if len(n.hosts) != idHostsCount {
+					errMsg("All hosts must have ID in %s", name)
+				}
+
+				// Mark network.
+				n.hasIdHosts = true
+			}
+		}
+
+		if !n.hasIdHosts && n.radiusAttributes != nil {
+			warnMsg("Ignoring 'radius_attributes' at %s", name)
+		}
+	}
+}
+
+func setupHost(v *ast.Attribute, s *symbolTable, n *network) *host {
+	name := v.Name
+	v6 := n.ipV6
+	h := new(host)
+	h.name = name
+	h.ipV6 = v6
+	hName := name[len("host:"):]
+	if strings.HasPrefix(hName, "id:") {
+		id := hName[len("id:"):]
+		if !isIdHostname(id) {
+			errMsg("Invalid name in definition of '%s'", name)
+		}
+		h.id = id
+		hName += "." + n.name
+		name += "." + n.name
+	} else {
+		if !isSimpleName(hName) {
+			errMsg("Invalid identifier in definition of '%s'", name)
+		}
+	}
+	s.host[hName] = h
+	n.hosts = append(n.hosts, h)
+
+	l := getComplexValue(v, n.name)
+	for _, a := range l {
+		switch a.Name {
+		case "ip":
+			h.ip = getIp(a, v6, name)
+		case "range":
+			h.ipRange = getIpRange(a, v6, name)
+		case "owner":
+			//h.owner = getOwnerRef(a, s, name)
+		case "ldap_id":
+			h.ldapId = getSingleValue(a, name)
+		case "radius_attributes":
+			h.radiusAttributes = getRadiusAttributes(a, name)
+		default:
+			if nat := addIPNat(a, h.nat, v6, name); nat != nil {
+				h.nat = nat
+			} else {
+				errMsg("Unexpected attribute in %s: %s", name, a.Name)
+			}
+		}
+	}
+	return h
+}
+
+var crypto2hub = make(map[*crypto]*routerIntf)
+var crypto2spokes = make(map[*crypto][]*network)
+
+func setupRouter(v *ast.Router, s *symbolTable) {
+	name := v.Name
+	v6 := v.IPV6
+	r := new(router)
+	r.name = name
+	r.ipV6 = v6
+	rName := name[len("router:"):]
+	if v6 {
+		s.router6[rName] = r
+	} else {
+		s.router[rName] = r
+	}
+	i := strings.Index(rName, "@")
+	if i != -1 {
+		r.deviceName = rName[:i]
+		r.vrf = rName[i+1:]
+	} else {
+		r.deviceName = rName
+	}
+	if i != -1 && !isSimpleName(rName[:i]) || !isSimpleName(rName[i+1:]) {
+		errMsg("Invalid identifier in definition of '%s'", name)
+	}
+	//r.description = v.Description.Text
+	noProtectSelf := false
+	var routingDefault *routing
+	for _, a := range v.Attributes {
+		switch a.Name {
+		case "managed":
+			r.managed = getManaged(a, name)
+		case "filter_only":
+			r.filterOnly = getIpPrefixList(a, v6, name)
+		case "model":
+			r.model = getModel(a, name)
+		case "no_group_code":
+			r.noGroupCode = getFlag(a, name)
+		case "no_protect_self":
+			noProtectSelf = getFlag(a, name)
+		case "log_deny":
+			r.logDeny = getFlag(a, name)
+		case "acl_use_real_ip":
+			r.aclUseRealIp = getFlag(a, name)
+		case "routing":
+			routingDefault = getRouting(a, name)
+		case "owner":
+			r.owner = getOwnerRef(a, s, name)
+		case "radius_attributes":
+			r.radiusAttributes = getRadiusAttributes(a, name)
+		case "policy_distribution_point":
+			r.policyDistributionPoint = getHostRef(a, s, name)
+		case "general_permit":
+			r.generalPermit = getProtocolList(a, s, v6, name)
+		default:
+			if !addLog(a, r) {
+				errMsg("Unexpected attribute in %s: %s", name, a.Name)
+			}
+		}
+	}
+	checkDuplAttr(v.Attributes, name)
+
+	// Find bridged interfaces of this device and check
+	// existence of corresponding layer3 device.
+	var l3Map map[string]bool
+	if r.managed != "" {
+		l3Map = make(map[string]bool)
+
+		// Search bridge interface having
+		// 1. name "interface:network/part" and
+		// 2. no IP address.
+	BRIDGED:
+		for _, a := range v.Interfaces {
+			idx := strings.Index(a.Name, "/")
+			if idx == -1 {
+				continue
+			}
+			for _, a2 := range a.ComplexValue {
+				switch a2.Name {
+				case "ip", "unnumbered", "negotiated":
+					break BRIDGED
+				}
+			}
+			// Remember name of corresponding layer3 interface without "/part".
+			l3Map[a.Name[:idx]] = true
+		}
+		if len(l3Map) != 0 {
+			// Check existence of layer3 interface(s).
+			seen := make(map[string]bool)
+			for _, a := range v.Interfaces {
+				if l3Map[a.Name] {
+					seen[a.Name] = true
+				}
+			}
+			for name2, _ := range l3Map {
+				if !seen[name2] {
+					errMsg("Must define interface:%s for corresponding"+
+						" bridge interfaces at %s", name2, name)
+				}
+			}
+		}
+	}
+
+	// Create objects representing hardware interfaces.
+	// All logical interfaces using the same hardware are linked
+	// to the same hardware object.
+	hwMap := make(map[string]*hardware)
+	for _, a := range v.Interfaces {
+		setupInterface(a, s, hwMap, l3Map, r)
+	}
+
+	if managed := r.managed; managed != "" {
+		if r.model == nil {
+			errMsg("Missing 'model' for managed %s", name)
+
+			// Prevent further errors.
+			r.model = &model{name: "unknown"}
+		}
+
+		// Router is semiManaged if only routes are generated.
+		if managed == "routing_only" {
+			r.semiManaged = true
+			r.routingOnly = true
+			r.managed = ""
+		}
+
+		if r.vrf != "" && !r.model.canVRF {
+			errMsg("Must not use VRF at %s of model %s", name, r.model.name)
+		}
+
+		for _, intf := range r.interfaces {
+
+			// Don't allow 'routing=manual' at single interface, because
+			// approve would remove manual routes otherwise.
+			// Approve only leaves routes unchanged, if Netspoc generates
+			// no routes at all.
+			if routing := intf.routing; routing != nil {
+				if routing.name == "manual" {
+					warnMsg(
+						"'routing=manual' must only be applied to router, not to %s",
+						intf.name)
+				}
+			}
+
+			// Interface inherits routing attribute from router.
+			if routingDefault != nil && intf.routing == nil {
+				intf.routing = routingDefault
+			}
+			if rt := intf.routing; rt != nil && intf.unnumbered {
+				rtName := rt.name
+				if rtName != "manual" && rtName != "dynamic" {
+					errMsg("Routing %s not supported for unnumbered %s",
+						rtName, intf.name)
+				}
+			}
+		}
+	}
+
+	// Check again after "managed=routing_only" has been removed.
+	if managed := r.managed; managed != "" {
+		if managed == "local" {
+			if r.filterOnly == nil {
+				errMsg("Missing attribute 'filter_only' for %s", name)
+			}
+			if r.model.hasIoACL {
+				errMsg("Must not use 'managed = local' at %s of model %s",
+					name, r.model.name)
+			}
+		}
+		if r.logDeny && !r.model.canLogDeny {
+			errMsg("Must not use attribute 'log_deny' at %s of moel %s",
+				name, r.model.name)
+		}
+
+		if m := r.log; m != nil {
+			if knownMod := r.model.logModifiers; knownMod != nil {
+				for name2, mod := range m {
+
+					// "": simple unmodified 'log' statement.
+					if mod == "" || knownMod[mod] != "" {
+						continue
+					}
+
+					var valid stringList
+					for k := range knownMod {
+						valid.push(k)
+					}
+					sort.Strings(valid)
+					what := fmt.Sprintf("'log:%s = %s' at %s of model %s",
+						name2, mod, name, r.model.name)
+					if valid != nil {
+						errMsg("Invalid %s\n Expected one of: %s",
+							what, strings.Join(valid, "|"))
+					} else {
+						errMsg("Unexpected %s\n Use 'log:%s;' only.",
+							what, name2)
+					}
+				}
+
+				// Store defining log tags in global known_log.
+				collectLog(m)
+			} else {
+				var names stringList
+				for k := range m {
+					names.push(k)
+				}
+				sort.Strings(names)
+				name2 := names[0]
+				errMsg("Must not use attribute 'log:%s' at %s of model %s",
+					name2, name, r.model.name)
+			}
+		}
+
+		if noProtectSelf && !r.model.needProtect {
+			errMsg("Must not use attribute 'no_protect_self' at %s of model %s",
+				name, r.model.name)
+		}
+		if r.model.needProtect {
+			r.needProtect = !noProtectSelf
+		}
+
+		// Detailed interface processing for managed routers.
+		hasCrypto := false
+		isCryptoHub := false
+		hasBindNat := false
+		bridged := false
+		for _, intf := range r.interfaces {
+			if intf.hub != nil || intf.spoke != nil {
+				hasCrypto = true
+				if r.model.crypto != "" {
+					errMsg("Crypto not supported for %s of model %s",
+						name, r.model.name)
+				}
+			}
+			if intf.hub != nil {
+				isCryptoHub = true
+			}
+			if intf.noCheck && (intf.hub == nil || !r.model.doAuth) {
+				intf.noCheck = false
+				warnMsg("Ignoring attribute 'no_check' at %s", intf)
+			}
+			if intf.bindNat != nil {
+				hasBindNat = true
+			}
+			// Link bridged interfaces with corresponding layer3 device.
+			// Used in findAutoInterfaces.
+			if intf.bridged {
+				bridged = true
+				layer3Name := intf.name[len("interface:"):]
+				idx := strings.Index(layer3Name, "/")
+				layer3Name = layer3Name[:idx]
+				intf.layer3Intf = s.routerIntf[layer3Name]
+			}
+		}
+
+		if bridged && routingDefault != nil {
+			errMsg("Must not apply attribute 'routing' to bridge %s", name)
+		}
+
+		checkNoInAcl(r)
+
+		if r.aclUseRealIp {
+			if !hasBindNat {
+				warnMsg("Ignoring attribute 'acl_use_real_ip' at %s,\n"+
+					" because it has no interface with 'bind_nat'", name)
+			}
+			if !r.model.canACLUseRealIP {
+				warnMsg("Ignoring attribute 'acl_use_real_ip' at %s of model %s",
+					name, r.model.name)
+			}
+			if hasCrypto {
+				errMsg("Must not use attribute 'acl_use_real_ip' at %s"+
+					" having crypto interfaces", name)
+			}
+		}
+		if r.managed == "local" {
+			if hasBindNat {
+				errMsg("Attribute 'bind_nat' is not allowed"+
+					" at interface of %s with 'managed = local'", name)
+			}
+		}
+		if r.model.doAuth {
+			if !isCryptoHub {
+				warnMsg("Attribute 'hub' needs to be defined"+
+					" at some interface of %s of model %s", name, r.model.name)
+			}
+		} else {
+			if r.radiusAttributes != nil {
+				warnMsg("Ignoring 'radius_attributes' at %s", name)
+			}
+		}
+	} else {
+		// Unmanaged device.
+		if r.owner != nil {
+			r.owner = nil
+			warnMsg("Ignoring attribute 'owner' at unmanaged %s", name)
+		}
+		bridged := false
+		for _, intf := range r.interfaces {
+			if intf.hub != nil {
+				for _, c := range intf.hub {
+					delete(crypto2hub, c)
+				}
+				errMsg("Unmanaged %s must not use attribute 'hub'", intf)
+			}
+			if intf.bindNat != nil {
+				r.semiManaged = true
+			}
+			if intf.reroutePermit != nil {
+				intf.reroutePermit = nil
+				warnMsg("Ignoring attribute 'reroute_permit' at unmanaged %s", intf)
+			}
+			if intf.bridged {
+				bridged = true
+			}
+		}
+
+		// Unmanaged bridge would complicate generation of static routes.
+		if bridged {
+			errMsg("Bridged interfaces must not be used at unmanged %s", name)
+		}
+	}
+
+	for _, intf := range r.interfaces {
+
+		if c := intf.spoke; c != nil {
+			// Create tunnel network.
+			netName := "tunnel:" + rName
+			tNet := new(network)
+			tNet.name = "network:" + netName
+			tNet.tunnel = true
+			tNet.ipV6 = v6
+
+			// Tunnel network will later be attached to crypto hub.
+			crypto2spokes[c] = append(crypto2spokes[c], tNet)
+
+			// Create tunnel interface.
+			iName := rName + "." + netName
+			tIntf := new(routerIntf)
+			tIntf.name = "interface:" + iName
+			tIntf.tunnel = true
+			tIntf.router = r
+			tIntf.network = tNet
+			tIntf.realIntf = intf
+			tIntf.routing = intf.routing
+			tIntf.bindNat = intf.bindNat
+			tIntf.id = intf.id
+			tIntf.ipV6 = v6
+			if r.managed != "" {
+				hw := intf.hardware
+				tIntf.hardware = hw
+				hw.interfaces.push(tIntf)
+			}
+			r.interfaces.push(tIntf)
+		}
+
+		if (intf.spoke != nil || intf.hub != nil) && !intf.noCheck {
+			moveLockedIntf(intf)
+		}
+	}
+}
+
+func setupInterface(v *ast.Attribute, s *symbolTable,
+	hwMap map[string]*hardware, l3Map map[string]bool, r *router) {
+
+	rName := r.name[len("router:"):]
+	nName := v.Name[len("interface:"):]
+	iName := rName + "." + nName
+	name := "interface:" + iName
+	v6 := r.ipV6
+	intf := new(routerIntf)
+	intf.name = name
+	intf.ipV6 = v6
+	var l []*ast.Attribute
+
+	// Allow short form of interface definition.
+	if !emptyAttr(v) {
+		l = getComplexValue(v, r.name)
+	}
+
+	var secondaryList intfList
+	var virtual *routerIntf
+	var vip bool
+	var hwName string
+	var subnetOf *network
+	var nat map[string]*network
+	for _, a := range l {
+		switch a.Name {
+		case "ip":
+			ipList := getIpList(a, v6, name)
+			intf.ip = ipList[0]
+			ipList = ipList[1:]
+
+			// Build interface objects for secondary IP addresses.
+			// These objects are named interface:router.name.2, ...
+			counter := 2
+			for _, ip := range ipList {
+				suffix := "." + strconv.Itoa(counter)
+				name := name + suffix
+				iName := iName + suffix
+				intf := new(routerIntf)
+				intf.name = name
+				intf.ipV6 = v6
+				intf.ip = ip
+				s.routerIntf[iName] = intf
+				secondaryList.push(intf)
+				counter++
+			}
+		case "hardware":
+			hwName = getSingleValue(a, name)
+		case "owner":
+			//
+		case "unnumbered":
+			intf.unnumbered = getFlag(a, name)
+		case "negotiated":
+			intf.negotiated = getFlag(a, name)
+		case "loopback":
+			intf.loopback = getFlag(a, name)
+		case "vip":
+			vip = getFlag(a, name)
+		case "no_in_acl":
+			intf.noInAcl = getFlag(a, name)
+		case "dhcp_server":
+			intf.dhcpServer = getFlag(a, name)
+		case "dhcp_client":
+			intf.dhcpClient = getFlag(a, name)
+		case "subnet_of":
+			// Needed for the implicitly defined network of 'loopback'.
+		case "hub":
+			//
+		case "spoke":
+			//
+		case "id":
+			intf.id = getUserID(a, name)
+		case "virtual":
+			virtual = getVirtual(a, v6, name)
+		case "bind_nat":
+			l := getIdentifierList(a, name)
+			sort.Strings(l)
+			// Remove duplicates.
+			var seen string
+			j := 0
+			for _, tag := range l {
+				if tag == seen {
+					warnMsg("Duplicate %s in 'bind_nat' of %s", tag, name)
+				} else {
+					seen = tag
+					l[j] = tag
+					j++
+				}
+			}
+			intf.bindNat = l[:j]
+		case "routing":
+			intf.routing = getRouting(a, name)
+		case "reroute_permit":
+			//
+		case "disabled":
+			intf.disabled = getFlag(a, name)
+		case "no_check":
+			intf.noCheck = getFlag(a, name)
+		default:
+			if m := addIntfNat(a, nat, v6, s, name); m != nil {
+				nat = m
+			} else if strings.HasPrefix(a.Name, "secondary:") {
+				_, name2 := splitCheckTypedName(a.Name)
+				intf := new(routerIntf)
+				intf.name = name + "." + name2
+				sCtx := a.Name + " of " + name
+				l := getComplexValue(a, name)
+				for _, a2 := range l {
+					switch a2.Name {
+					case "ip":
+						intf.ip = getIp(a2, v6, sCtx)
+					default:
+						errMsg("Unexpected attribute in %s: %s", sCtx, a2.Name)
+					}
+				}
+				if intf.ip == nil {
+					errMsg("Missing IP in %s", sCtx)
+					intf.short = true
+				}
+				s.routerIntf[iName+"."+name2] = intf
+				secondaryList.push(intf)
+			} else {
+				errMsg("Unexpected attribute in %s: %s", name, a.Name)
+			}
+		}
+	}
+
+	if l3Map[v.Name] {
+		intf.loopback = true
+		intf.isLayer3 = true
+		if r.model.class == "ASA" {
+			if hwName != "device" {
+				errMsg(
+					"Layer3 %s must use 'hardware' named 'device' for model 'ASA'",
+					intf)
+			}
+		}
+		if intf.unnumbered || intf.negotiated || intf.short || intf.bridged {
+			errMsg("Layer3 %s must have IP address", intf)
+			// Prevent further errors.
+			intf.disabled = true
+			intf.isLayer3 = false
+		}
+		if secondaryList != nil || virtual != nil {
+			errMsg("Layer3 %s must not have secondary or virtual IP", intf)
+		}
+	}
+
+	// Interface at bridged network
+	// - without IP is interface of bridge,
+	// - with IP is interface of router.
+	if intf.ip == nil && strings.Index(iName, "/") != -1 {
+		intf.bridged = true
+	}
+
+	// Swap virtual interface and main interface
+	// or take virtual interface as main interface if no main IP available.
+	// Subsequent code becomes simpler if virtual interface is main interface.
+	if virtual != nil {
+		if intf.unnumbered {
+			errMsg("No virtual IP supported for unnumbered %s", name)
+		} else if intf.negotiated {
+			errMsg("No virtual IP supported for negotiated %s", name)
+		} else if intf.bridged {
+			errMsg("No virtual IP supported for bridged %s", name)
+		}
+		if intf.ip != nil {
+
+			// Move main IP to secondary.
+			secondary := new(routerIntf)
+			secondary.name = intf.name
+			secondaryList.push(secondary)
+
+			// But we need the original main interface
+			// when handling auto interfaces.
+			intf.origMain = secondary
+		}
+		if intf.nat != nil {
+			errMsg("%s with virtual interface must not use attribute 'nat'",
+				name)
+		}
+		if intf.hub != nil {
+			errMsg("%s with virtual interface must not use attribute 'hub'",
+				name)
+		}
+		if intf.spoke != nil {
+			errMsg("%s with virtual interface must not use attribute 'spoke'",
+				name)
+		}
+		intf.name = virtual.name
+		intf.ip = virtual.ip
+		intf.redundant = virtual.redundant
+		intf.redundancyType = virtual.redundancyType
+		intf.redundancyId = virtual.redundancyId
+		virtualInterfaces.push(intf)
+	} else if intf.ip == nil &&
+		!intf.unnumbered && !intf.negotiated && !intf.bridged {
+		intf.short = true
+	}
+	if intf.nat != nil {
+		if intf.unnumbered {
+			errMsg("No NAT supported for unnumbered %s", name)
+		} else if intf.negotiated {
+			errMsg("No NAT supported for negotiated %s", name)
+		} else if intf.short {
+			errMsg("No NAT supported for short %s", name)
+		} else if intf.bridged {
+			errMsg("No NAT supported for bridged %s", name)
+		}
+	}
+
+	// Attribute 'vip' is an alias for 'loopback'.
+	var typ string
+	if vip {
+		typ = "'vip'"
+		intf.loopback = true
+	}
+	if intf.loopback {
+		typ = "loopback"
+	}
+	if intf.bridged {
+		typ = "bridged"
+		if virtual != nil {
+			errMsg("Virtual IP address not supported for %s %s", typ, name)
+			virtual = nil
+			intf.origMain = nil // From virtual interface
+		}
+		if intf.owner != nil {
+			errMsg("Attribute 'owner' not supported for %s %s", typ, name)
+		}
+	}
+	if intf.loopback || intf.bridged {
+		if secondaryList != nil {
+			errMsg("Secondary IP address not supported for %s %s", typ, name)
+			secondaryList = nil
+			intf.origMain = nil // From virtual interface
+		}
+
+		// Most attributes are invalid for loopback interface.
+		if intf.noInAcl {
+			errMsg("Invalid attribute 'no_in_acl' for %s %s", typ, name)
+		}
+		if intf.noCheck {
+			errMsg("Attribute 'no_check' not supported for %s %s", typ, name)
+		}
+		if intf.id != "" {
+			errMsg("Attribute 'id' not supported for %s %s", typ, name)
+		}
+		if intf.hub != nil {
+			errMsg("Attribute 'hub' not supported for %s %s", typ, name)
+		}
+		if intf.spoke != nil {
+			errMsg("Attribute 'spoke' not supported for %s %s", typ, name)
+		}
+		if intf.dhcpClient {
+			errMsg("Attribute 'dhcp_client' not supported for %s %s", typ, name)
+		}
+		if intf.dhcpServer {
+			errMsg("Attribute 'dhcp_server' not supported for %s %s", typ, name)
+		}
+		if intf.routing != nil {
+			errMsg("Attribute 'routing' not supported for %s %s", typ, name)
+		}
+		if intf.reroutePermit != nil {
+			errMsg("Attribute 'reroute_permit' not supported for %s %s", typ, name)
+		}
+		if intf.unnumbered {
+			errMsg("Attribute 'unnumbered' not supported for %s %s", typ, name)
+		} else if intf.negotiated {
+			errMsg("Attribute 'negotiated' not supported for %s %s", typ, name)
+		} else if intf.short {
+			errMsg("%s %s must have IP address", typ, name)
+		}
+	}
+	if subnetOf != nil && !intf.loopback {
+		errMsg("Attribute 'subnet_of' must not be used at %s\n"+
+			" Is only valid together with  attribute 'loopback'", name)
+	}
+	if intf.spoke != nil {
+		if secondaryList != nil {
+			errMsg("%s with attribute 'spoke' must not have secondary interfaces",
+				intf)
+			secondaryList = nil
+		}
+		if intf.hub != nil {
+			errMsg("%s with attribute 'spoke' must not have attribute 'hub'",
+				intf)
+		}
+	} else if intf.id != "" {
+		errMsg("Attribute 'id' is only valid with 'spoke' at %s", intf)
+	}
+	if l := intf.hub; l != nil {
+		if intf.unnumbered || intf.negotiated || intf.short || intf.bridged {
+			errMsg("Crypto hub %s must have IP address", intf)
+		}
+		for _, c := range l {
+			if other, found := crypto2hub[c]; found {
+				errMsg("Must use 'hub = %s' exactly once, not at both\n"+
+					" - %s\n"+
+					" - %s", c.name, other, intf)
+			} else {
+				crypto2hub[c] = intf
+			}
+		}
+	}
+	if secondaryList != nil {
+		if intf.negotiated || intf.short || intf.bridged {
+			errMsg("%s without IP address must not have secondary address", intf)
+			secondaryList = nil
+		}
+	}
+	for _, s := range secondaryList {
+		s.mainIntf = intf
+		s.hardware = intf.hardware
+		s.bindNat = intf.bindNat
+		s.routing = intf.routing
+		s.disabled = intf.disabled
+	}
+	if r.managed != "" {
+
+		// Managed router must not have short interface.
+		if intf.short {
+			errMsg("Short definition of %s not allowed", name)
+		}
+
+		// Interface of managed router needs to have a hardware name.
+		if hwName == "" {
+			errMsg("Missing 'hardware' for %s", name)
+
+			// Prevent further errors.
+			hwName = "unknown"
+		}
+
+		var hw *hardware
+		if hw = hwMap[hwName]; hw != nil {
+			// All logical interfaces of one hardware interface
+			// need to use the same NAT binding,
+			// because NAT operates on hardware, not on logic.
+			if !bindNatEq(intf.bindNat, hw.bindNat) {
+				errMsg("All logical interfaces of %s\n"+
+					" at %s must use identical NAT binding", hwName, r.name)
+			}
+		} else {
+			hw = &hardware{name: hwName, loopback: true}
+			hwMap[hwName] = hw
+			r.hardware = append(r.hardware, hw)
+			hw.bindNat = intf.bindNat
+		}
+		// Hardware keeps attribute .loopback only if all
+		// interfaces have attribute {loopback}.
+		if !intf.loopback {
+			hw.loopback = false
+		}
+
+		// Remember, which logical interfaces are bound
+		// to which hardware.
+		hw.interfaces.push(intf)
+		intf.hardware = hw
+
+		// Interface of managed router must not have individual owner,
+		// because whole device is managed from one place.
+		if intf.owner != nil {
+			warnMsg("Ignoring attribute 'owner' at managed %s", intf.name)
+			intf.owner = nil
+		}
+
+		// Attribute 'vip' only supported at unmanaged router.
+		if vip {
+			errMsg("Must not use attribute 'vip' at managed %s", name)
+		}
+	}
+
+	// Automatically create a network for loopback interface.
+	if intf.loopback {
+		var shortName string
+		var fullName string
+
+		// Special handling needed for virtual loopback interfaces.
+		// The created network needs to be shared among a group of
+		// interfaces.
+		if intf.redundant {
+
+			// Shared virtual loopback network gets name
+			// 'virtual:netname'. Don't use standard name to prevent
+			// network from getting referenced from rules.
+			shortName = "virtual:" + nName
+			fullName = "network:" + shortName
+		} else {
+
+			// Single loopback network needs not to get an unique name.
+			// Take an invalid name 'router.loopback' to prevent name
+			// clashes with real networks or other loopback networks.
+			fullName = intf.name
+			shortName = fullName[len("interface:"):]
+		}
+		var n *network
+		if intf.redundant {
+			n = s.network[shortName]
+		}
+		if n == nil {
+			n = new(network)
+			n.name = fullName
+			n.ip = intf.ip
+			n.mask = getHostMask(v6)
+
+			// Mark as automatically created.
+			n.loopback = true
+			n.subnetOf = subnetOf
+			n.isLayer3 = intf.isLayer3
+			n.ipV6 = v6
+
+			// Move NAT definition to loopback network.
+			n.nat = nat
+		}
+		intf.network = n
+		if intf.redundant {
+			s.network[shortName] = n
+		}
+	} else {
+		// Link interface with network.
+		n := s.network[nName]
+		if n == nil {
+			msg := "Referencing undefined network:%s from %s"
+			if intf.disabled {
+				warnMsg(msg, nName, name)
+			} else {
+				errMsg(msg, nName, name)
+				intf.disabled = true
+			}
+		} else {
+			for _, intf := range append(intfList{intf}, secondaryList...) {
+				intf.network = n
+				n.interfaces.push(intf)
+				if !intf.short {
+					checkInterfaceIp(intf, n)
+				}
+			}
+		}
+
+		// Non loopback interface must use simple NAT with single IP
+		// and without any NAT attributes.
+		if len(nat) != 0 {
+			intf.nat = make(map[string]net.IP)
+			for tag, info := range nat {
+				// Reject all non IP NAT attributes.
+				if info.hidden || info.identity || info.dynamic {
+					errMsg("Only 'ip' allowed in nat:%s of %s", tag, intf)
+					// ToDo: Check if mask is set.
+				} else {
+					intf.nat[tag] = info.ip
+				}
+			}
+		}
+	}
+
+	for _, intf := range append(intfList{intf}, secondaryList...) {
+		// Link interface with router and vice versa.
+		r.interfaces.push(intf)
+		intf.router = r
+		intf.ipV6 = r.ipV6
+		s.routerIntf[iName] = intf
+	}
+}
+
+func setupService(v *ast.Service, s *symbolTable) {
+	name := v.Name
+	v6 := v.IPV6
+	sName := name[len("service:"):]
+	sv := s.service[sName]
+	sv.name = name
+	if !isSimpleName(sName) {
+		errMsg("Invalid identifier in definition of '%s'", name)
+	}
+	if d := v.Description; d != nil {
+		sv.description = d.Text
+	}
+	for _, a := range v.Attributes {
+		switch a.Name {
+		case "sub_owner":
+			sv.subOwner = getOwnerRef(a, s, name)
+		case "overlaps":
+			sv.overlaps = getServiceRefList(a, s, name)
+		case "multi_owner":
+			sv.multiOwner = getFlag(a, name)
+		case "unknown_owner":
+			sv.unknownOwner = getFlag(a, name)
+		case "has_unenforceable":
+			sv.unknownOwner = getFlag(a, name)
+		case "disabled":
+			sv.disabled = getFlag(a, name)
+		case "disable_at":
+			sv.disableAt = getSingleValue(a, "'disable_at' of "+name)
+			if dateIsReached(sv.disableAt, name) {
+				sv.disabled = true
+			}
+		default:
+			errMsg("Unexpected attribute in %s: %s", name, a.Name)
+		}
+	}
+	sv.foreach = v.Foreach
+	sv.user = v.User.Elements
+	for _, v2 := range v.Rules {
+		ru := new(unexpRule)
+		ru.service = sv
+		if v2.Deny {
+			ru.action = "deny"
+		} else {
+			ru.action = "permit"
+		}
+		ru.src = v2.Src.Elements
+		ru.dst = v2.Dst.Elements
+		ru.prt = getProtocolList(v2.Prt, s, v6, name)
+		if a2 := v2.Log; a2 != nil {
+			l := getIdentifierList(a2, name)
+			sort.Strings(l)
+			prev := ""
+			j := 0
+			for _, tag := range l {
+				if tag == prev {
+					warnMsg("Duplicate '%s' in log of %s", tag, name)
+				} else {
+					prev = tag
+					l[j] = tag
+					j++
+				}
+			}
+			ru.log = strings.Join(l[:j], ",")
+		}
+		sv.rules = append(sv.rules, ru)
+	}
+}
+
+func splitCheckTypedName(s string) (string, string) {
+	typ, name := splitTypedName(s)
+	if !isSimpleName(name) {
+		errMsg("Invalid identifier in definition of '%s'", s)
+	}
+	return typ, name
+}
+
+func splitTypedName(s string) (string, string) {
+	i := strings.Index(s, ":")
+	return s[:i], s[i+1:]
+}
+
+func fullHostname(hName, nName string) string {
+	_, name2 := splitTypedName(hName)
+
+	// Make ID unique by appending name of enclosing network.
+	if strings.HasPrefix(name2, "id:") {
+		name2 += "." + nName
+	}
+	return name2
+}
+
+func checkDuplicate(l []ast.Toplevel) {
+	seen := make(map[string]string)
+	check := func(name, fName string) {
+		if where := seen[name]; where != "" {
+			if fName != where {
+				where += " and " + fName
+			}
+			errMsg("Duplicate definition of %s in %s", name, where)
+		}
+		seen[name] = fName
+	}
+	for _, a := range l {
+		topName := a.GetName()
+		fileName := a.FileName()
+		_, name := splitTypedName(topName)
+		switch x := a.(type) {
+		case *ast.Network:
+			for _, a := range x.Hosts {
+				name2 := fullHostname(a.Name, name)
+				check("host:"+name2, fileName)
+			}
+		case *ast.Router:
+			if x.IPV6 {
+				topName = "IPv6 " + topName
+			}
+		}
+		check(topName, fileName)
+	}
+}
+
+func checkDuplAttr(l []*ast.Attribute, ctx string) {
+	seen := make(map[string]bool)
+	for _, a := range l {
+		if seen[a.Name] {
+			errMsg("Duplicate attribute '%s' in %s", a.Name, ctx)
+		} else {
+			seen[a.Name] = true
+		}
+	}
+}
+
+func emptyAttr(a *ast.Attribute) bool {
+	return a.ComplexValue == nil && a.ValueList == nil
+}
+
+func getFlag(a *ast.Attribute, ctx string) bool {
+	if !emptyAttr(a) {
+		errMsg("No value expected for flag '%s' of %s", a.Name, ctx)
+	}
+	return true
+}
+
+func getSingleValue(a *ast.Attribute, ctx string) string {
+	if a.ComplexValue != nil || len(a.ValueList) != 1 {
+		errMsg("Single value expected in '%s' of %s", a.Name, ctx)
+		return ""
+	}
+	return a.ValueList[0].Value
+}
+
+func getValueList(a *ast.Attribute, ctx string) stringList {
+	if a.ComplexValue != nil || a.ValueList == nil {
+		errMsg("List of values expected in '%s' of %s", a.Name, ctx)
+		return nil
+	}
+	result := make(stringList, 0, len(a.ValueList))
+	for _, v := range a.ValueList {
+		result.push(v.Value)
+	}
+	return result
+}
+
+func getComplexValue(a *ast.Attribute, ctx string) []*ast.Attribute {
+	l := a.ComplexValue
+	if l == nil || a.ValueList != nil {
+		errMsg("Structured value expected in '%s' of %s", a.Name, ctx)
+	}
+	aCtx := a.Name + " of " + ctx
+	checkDuplAttr(l, aCtx)
+	return l
+}
+
+func getIdentifier(a *ast.Attribute, ctx string) string {
+	v := getSingleValue(a, ctx)
+	if !isSimpleName(v) {
+		errMsg("Invalid identifier in '%s' of %s: %s", a.Name, ctx, v)
+	}
+	return v
+}
+
+func getIdentifierList(a *ast.Attribute, ctx string) []string {
+	l := getValueList(a, ctx)
+	for _, v := range l {
+		if !isSimpleName(v) {
+			errMsg("Invalid identifier in '%s' of %s: %s", a.Name, ctx, v)
+		}
+	}
+	return l
+}
+
+func getManaged(a *ast.Attribute, ctx string) string {
+	if emptyAttr(a) {
+		return "standard"
+	}
+	v := getSingleValue(a, ctx)
+	switch v {
+	case "secondary", "standard", "full", "primary", "local", "routing_only":
+		return v
+	}
+	errMsg("Invalid value for '%s' of %s: %s", a.Name, ctx, v)
+	return ""
+}
+
+var routerInfo = map[string]*model{
+	"IOS": &model{
+		routing:         "IOS",
+		filter:          "IOS",
+		stateless:       true,
+		statelessSelf:   true,
+		statelessICMP:   true,
+		inversedACLMask: true,
+		canVRF:          true,
+		canLogDeny:      true,
+		logModifiers:    map[string]string{"log-input": ":subst"},
+		hasOutACL:       true,
+		needProtect:     true,
+		crypto:          "IOS",
+		printRouterIntf: true,
+		commentChar:     "!",
+	},
+	"NX-OS": {
+		routing:         "NX-OS",
+		filter:          "NX-OS",
+		stateless:       true,
+		statelessSelf:   true,
+		statelessICMP:   true,
+		canObjectgroup:  true,
+		inversedACLMask: true,
+		usePrefix:       true,
+		canVRF:          true,
+		canLogDeny:      true,
+		logModifiers:    map[string]string{},
+		hasOutACL:       true,
+		needProtect:     true,
+		printRouterIntf: true,
+		commentChar:     "!",
+	},
+	"ASA": {
+		routing: "ASA",
+		filter:  "ASA",
+		logModifiers: map[string]string{
+			"emergencies":   "0",
+			"alerts":        "1",
+			"critical":      "2",
+			"errors":        "3",
+			"warnings":      "4",
+			"notifications": "5",
+			"informational": "6",
+			"debugging":     "7",
+			"disable":       "disable",
+		},
+		statelessICMP:    true,
+		hasOutACL:        true,
+		canACLUseRealIP:  true,
+		canObjectgroup:   true,
+		canDynCrypto:     true,
+		crypto:           "ASA",
+		noCryptoFilter:   true,
+		commentChar:      "!",
+		noFilterICMPCode: true,
+		needACL:          true,
+	},
+	"Linux": {
+		routing:     "iproute",
+		filter:      "iptables",
+		hasIoACL:    true,
+		commentChar: "#",
+	},
+}
+
+func init() {
+	for name := range routerInfo {
+		// Is changed for model with extension. Used in error messages.
+		routerInfo[name].name = name
+		// Is left unchanged with extensions. Used in header of generated files.
+		routerInfo[name].class = name
+	}
+}
+
+func getModel(a *ast.Attribute, ctx string) *model {
+	l := getValueList(a, ctx)
+	m := l[0]
+	attributes := l[1:]
+	orig, found := routerInfo[m]
+	if !found {
+		errMsg("Unknown model in %s: %s", ctx, m)
+
+		// Prevent further errors.
+		return &model{name: m}
+	}
+	info := *orig
+	if len(attributes) > 0 {
+		add := " "
+		for _, att := range attributes {
+			add += ", " + att
+			switch m {
+			case "IOS":
+				switch att {
+				case "EZVPN":
+					info.crypto = "EZVPN"
+				case "FW":
+					info.stateless = false
+				default:
+					goto FAIL
+				}
+			case "ASA":
+				switch att {
+				case "VPN":
+					info.crypto = "ASA_VPN"
+					info.doAuth = true
+				case "CONTEXT":
+					info.cryptoInContext = true
+				case "EZVPN":
+					info.crypto = "ASA_EZVPN"
+				default:
+					goto FAIL
+				}
+			default:
+				goto FAIL
+			}
+			continue
+		FAIL:
+			errMsg("Unknown extension in '%s' of %s: %s", a.Name, ctx, att)
+		}
+		info.name += add
+	}
+	return &info
+}
+
+// Definition of dynamic routing protocols.
+var routingInfo = map[string]*routing{
+	"EIGRP": &routing{
+		name:  "EIGRP",
+		prt:   &proto{proto: "88"},
+		mcast: mcastInfo{v4: []string{"224.0.0.10"}, v6: []string{"ff02::a"}},
+	},
+	"OSPF": &routing{
+		name: "OSPF",
+		prt:  &proto{proto: "89"},
+		mcast: mcastInfo{v4: []string{"224.0.0.5", "224.0.0.6"},
+			v6: []string{"ff02::5", "ff02::6"}},
+	},
+	"RIPv2": &routing{
+		name: "RIP",
+		prt:  &proto{proto: "udp", ports: [2]int{520, 520}},
+		mcast: mcastInfo{v4: []string{"224.0.0.9"},
+			v6: []string{"ff02::9"}},
+	},
+	"dynamic": &routing{name: "dynamic"},
+
+	// Identical to 'dynamic', but must only be applied to router, not
+	// to routerIntf.
+	"manual": &routing{name: "manual"},
+}
+
+func getRouting(a *ast.Attribute, ctx string) *routing {
+	v := getSingleValue(a, ctx)
+	r := routingInfo[v]
+	if r == nil {
+		errMsg("Unknown routing protocol in '%s' of %s", a.Name, ctx)
+	}
+	return r
+}
+
+// Definition of redundancy protocols.
+var xxrpInfo = map[string]*xxrp{
+	"VRRP": &xxrp{
+		prt:   &proto{proto: "112"},
+		mcast: mcastInfo{v4: []string{"224.0.0.18"}, v6: []string{"ff02::12"}},
+	},
+	"HSRP": &xxrp{
+		prt: &proto{proto: "udp", ports: [2]int{1985, 1985}},
+		mcast: mcastInfo{v4: []string{"224.0.0.2"},
+
+			// No official IPv6 multicast address for HSRP available,
+			// therefore using IPv4 equivalent.
+			v6: []string{"::e000:2"}},
+	},
+	"HSRPv2": &xxrp{
+		prt: &proto{proto: "udp", ports: [2]int{1985, 1985}},
+		mcast: mcastInfo{v4: []string{"224.0.0.102"},
+			v6: []string{"ff02::66"}},
+	},
+}
+
+func getVirtual(a *ast.Attribute, v6 bool, ctx string) *routerIntf {
+	virtual := new(routerIntf)
+	virtual.name = ctx + ".virtual"
+	vCtx := "'" + a.Name + "' of " + ctx
+	l := getComplexValue(a, ctx)
+	for _, a2 := range l {
+		switch a2.Name {
+		case "ip":
+			virtual.ip = getIp(a2, v6, vCtx)
+		case "type":
+			t := getSingleValue(a2, vCtx)
+			if _, found := xxrpInfo[t]; !found {
+				errMsg("Unknown redundancy protocol in %s", vCtx)
+			}
+			virtual.redundancyType = t
+		case "id":
+			id := getSingleValue(a2, vCtx)
+			num, err := strconv.Atoi(id)
+			if err != nil {
+				errMsg("Redundancy ID must be numeric in %s", vCtx)
+			} else if !(num >= 0 || num < 256) {
+				errMsg("Redundancy ID must be < 256 in %s", vCtx)
+			}
+			virtual.redundancyId = id
+		default:
+			errMsg("Unexpected attribute in %s: %s", vCtx, a2.Name)
+		}
+	}
+	if virtual.ip == nil {
+		errMsg("Missing IP in %s", vCtx)
+		return nil
+	}
+	if virtual.redundancyId != "" && virtual.redundancyType == "" {
+		errMsg("Redundancy ID is given without redundancy protocol in %s",
+			vCtx)
+	}
+	return virtual
+}
+
+func isDomain(n string) bool {
+	for _, part := range strings.Split(n, ".") {
+		if !isSimpleName(part) {
+			return false
+		}
+	}
+	return n != ""
+}
+
+func isIdHostname(id string) bool {
+	i := strings.Index(id, "@")
+	// Leading "@" is ok.
+	return (i <= 0 || isDomain(id[:i])) && isDomain(id[i+1:])
+}
+
+func getUserID(a *ast.Attribute, ctx string) string {
+	id := getSingleValue(a, ctx)
+	i := strings.Index(id, "@")
+	if !(i > 0 && isDomain(id[:i]) && isDomain(id[i+1:])) {
+		errMsg("Invalid '%s' in %s: %s", a.Name, ctx, id)
+	}
+	return id
+}
+
+func isSimpleName(n string) bool {
+	return n != "" && strings.IndexAny(n, ".:/@") == -1
+}
+
+func getIp(a *ast.Attribute, v6 bool, ctx string) net.IP {
+	return convIP(getSingleValue(a, ctx), v6, a.Name, ctx)
+}
+
+func getIpList(a *ast.Attribute, v6 bool, ctx string) []net.IP {
+	var result []net.IP
+	for _, v := range getValueList(a, ctx) {
+		result = append(result, convIP(v, v6, a.Name, ctx))
+	}
+	return result
+}
+
+func getIpRange(a *ast.Attribute, v6 bool, ctx string) [2]net.IP {
+	v := getSingleValue(a, ctx)
+	l := strings.Split(v, " - ")
+	var result [2]net.IP
+	if len(l) != 2 {
+		errMsg("Expected IP range in '%s' of %s", a.Name, ctx)
+	} else {
+		result[0] = convIP(l[0], v6, a.Name, ctx)
+		result[1] = convIP(l[1], v6, a.Name, ctx)
+	}
+	return result
+}
+
+func getIpPrefix(a *ast.Attribute, v6 bool, ctx string) (net.IP, net.IPMask) {
+
+	v := getSingleValue(a, ctx)
+	i := strings.Index(v, "/")
+	if i == -1 {
+		errMsg("Expected 'IP/prefixlen' in '%s' of %s", a.Name, ctx)
+		return nil, nil
+	}
+	ip, p := v[:i], v[i+1:]
+	return convIP(ip, v6, a.Name, ctx), convToMask(p, v6, a.Name, ctx)
+}
+
+func getIpPrefixList(a *ast.Attribute, v6 bool, ctx string) []net.IPNet {
+	var result []net.IPNet
+	for _, v := range getValueList(a, ctx) {
+		i := strings.Index(v, "/")
+		if i == -1 {
+			errMsg("Expected 'IP/prefixlen' in '%s' of %s", a.Name, ctx)
+			continue
+		}
+		ip, p := v[:i], v[i+1:]
+		result = append(result,
+			net.IPNet{
+				IP:   convIP(ip, v6, a.Name, ctx),
+				Mask: convToMask(p, v6, a.Name, ctx)})
+	}
+	return result
+}
+
+func convIP(s string, v6 bool, name, ctx string) net.IP {
+	ip := net.ParseIP(s)
+	if ip == nil {
+		errMsg("Invalid IP address in '%s' of %s: %s", name, ctx, s)
+		return []byte{}
+	}
+	v4IP := ip.To4()
+	if v6 {
+		if v4IP != nil {
+			errMsg("IPv6 address expected in '%s' of %s", name, ctx)
+		}
+		return ip
+	}
+	if v4IP == nil {
+		errMsg("IPv4 address expected in '%s' of %s", name, ctx)
+	}
+	return v4IP
+}
+
+func convToMask(prefix string, v6 bool, name, ctx string) net.IPMask {
+	p, err := strconv.Atoi(prefix)
+	if err == nil {
+		size := 32
+		if v6 {
+			size = 128
+		}
+		mask := net.CIDRMask(p, size)
+		if mask != nil {
+			return mask
+		}
+	}
+	errMsg("Invalid prefix in '%s' of %s", name, ctx)
+	return nil
+}
+
+// Check if given date has been reached already.
+var dateRegex = regexp.MustCompile(`^(\d\d\d\d-\d\d-\d\d)$`)
+
+func dateIsReached(s, ctx string) bool {
+	l := dateRegex.FindStringSubmatch(s)
+	if l == nil {
+		errMsg("Date expected as yyyy-mm-dd in %s", ctx)
+		return false
+	}
+	date, _ := time.Parse("2000-01-02", l[1])
+	return time.Now().After(date)
+}
+
+func getNetworkRef(a *ast.Attribute, s *symbolTable, ctx string) *network {
+	typ, name := getTypedName(a, ctx)
+	if typ != "network" {
+		errMsg("Must only use network name in '%s' of %s", a.Name, ctx)
+		return nil
+	}
+	n := s.network[name]
+	if n == nil {
+		warnMsg("Ignoring undefined network:%s from attribute '%s' of\n of %s",
+			name, a.Name, ctx)
+	}
+	return n
+}
+
+func getHostRef(a *ast.Attribute, s *symbolTable, ctx string) *host {
+	typ, name := getTypedName(a, ctx)
+	if typ != "host" {
+		errMsg("Must only use host name in '%s' of %s", a.Name, ctx)
+		return nil
+	}
+	h := s.host[name]
+	if h == nil {
+		warnMsg("Ignoring undefined host:%s in '%s' of %s", name, a.Name, ctx)
+	}
+	return h
+}
+
+func getTypedName(a *ast.Attribute, ctx string) (string, string) {
+	v := getSingleValue(a, ctx)
+	i := strings.Index(v, ":")
+	if i == -1 {
+		errMsg("Typed name expected in '%s' of %s", a.Name, ctx)
+	}
+	return v[:i], v[i+1:]
+}
+
+func getOwnerRef(a *ast.Attribute, s *symbolTable, ctx string) *owner {
+	name := getIdentifier(a, ctx)
+	o := s.owner[name]
+	if o == nil {
+		warnMsg("Ignoring undefined owner:%s of %s", name, ctx)
+	}
+	return o
+}
+
+func getServiceRefList(
+	a *ast.Attribute, s *symbolTable, ctx string) []*service {
+
+	l := getValueList(a, ctx)
+	result := make([]*service, 0, len(l))
+	for _, v := range l {
+		name := strings.TrimPrefix(v, "service:")
+		if len(name) == len(v) {
+			errMsg("Expected type 'service:' in attribute 'overlaps' of %s", ctx)
+		} else if s, found := s.service[name]; found {
+			result = append(result, s)
+		} else {
+			errMsg("Unknown service:%s in attribute 'overlaps' of %s", name, ctx)
+		}
+	}
+	return result
+}
+
+func getProtocolRef(name string, s *symbolTable, ctx string) *proto {
+	p := s.protocol[name]
+	if p == nil {
+		errMsg("Can't resolve reference to protocol:%s in %s", name, ctx)
+	} else {
+		p.isUsed = true
+	}
+	return p
+}
+
+func getProtocolList(
+	a *ast.Attribute, s *symbolTable, v6 bool, ctx string) protoList {
+
+	l := getValueList(a, ctx)
+	ctx2 := a.Name + " of " + ctx
+	return expandProtocols(l, s, v6, ctx2)
+}
+
+func expandProtocols(
+	l stringList, s *symbolTable, v6 bool, ctx string) protoList {
+
+	var result protoList
+	for _, v := range l {
+		if i := strings.Index(v, ":"); i != -1 {
+			typ := v[:i]
+			name := v[i+1:]
+			switch typ {
+			case "protocol":
+				result.push(getProtocolRef(name, s, ctx))
+			case "protocolgroup":
+				result = append(result, expandProtocolgroup(name, s, v6, ctx)...)
+			default:
+				errMsg("Unexpected type in %s: %s", ctx, v)
+			}
+		} else {
+			result.push(getSimpleProtocol(v, v6, ctx))
+		}
+	}
+	return result
+}
+
+func expandProtocolgroup(
+	name string, s *symbolTable, v6 bool, ctx string) protoList {
+
+	g, found := s.protocolgroup[name]
+	if !found {
+		errMsg("Can't resolve reference to protocolgroup:%s in %s", name, ctx)
+		return nil
+	}
+	if g.recursive {
+		errMsg("Found recursion in definition of %s", ctx)
+	} else if !g.isUsed {
+		g.isUsed = true
+		g.recursive = true
+		ctx2 := "protocolgroup:" + name
+		g.elements = expandProtocols(g.list, s, v6, ctx2)
+		g.recursive = false
+	}
+	return g.elements
+}
+
+func getRadiusAttributes(a *ast.Attribute, ctx string) map[string]string {
+	result := make(map[string]string)
+	rCtx := a.Name + " of " + ctx
+	l := getComplexValue(a, ctx)
+	for _, a2 := range l {
+		k := a2.Name
+		if !isSimpleName(k) {
+			errMsg("Invalid identifier '%s' of %s", k, rCtx)
+		}
+		v := ""
+		if a2.ComplexValue != nil || len(a2.ValueList) > 1 {
+			errMsg("Expected single value for '%s' of %s", k, rCtx)
+		} else if len(a2.ValueList) == 1 {
+			v = a2.ValueList[0].Value
+		}
+		result[k] = v
+	}
+	return result
+}
+
+func addLog(a *ast.Attribute, r *router) bool {
+	if !strings.HasPrefix(a.Name, "log:") {
+		return false
+	}
+	_, name := splitCheckTypedName(a.Name)
+	modifier := ""
+	if !emptyAttr(a) {
+		modifier = getSingleValue(a, r.name)
+	}
+	m := r.log
+	if m == nil {
+		m = make(map[string]string)
+		r.log = m
+	}
+	m[name] = modifier
+	return true
+}
+
+func addAttr(
+	a *ast.Attribute, attr map[string]string, ctx string) map[string]string {
+	v := getSingleValue(a, ctx)
+	switch v {
+	case "restrict", "enable", "ok":
+		if attr == nil {
+			attr = make(map[string]string)
+		}
+		attr[a.Name] = v
+		return attr
+	}
+	errMsg("Expected 'restrict', 'enable' or 'ok' in '%s' of %s", a.Name, ctx)
+	return attr
+}
+
+func addNetNat(a *ast.Attribute, m map[string]*network, v6 bool,
+	s *symbolTable, ctx string) map[string]*network {
+
+	return addXNat(a, m, v6, s, ctx, getIpPrefix)
+}
+func addIntfNat(a *ast.Attribute, m map[string]*network, v6 bool,
+	s *symbolTable, ctx string) map[string]*network {
+
+	return addXNat(a, m, v6, s, ctx,
+		func(a *ast.Attribute, v6 bool, ctx string) (net.IP, net.IPMask) {
+			ip := getSingleValue(a, ctx)
+			return convIP(ip, v6, a.Name, ctx), getHostMask(v6)
+		})
+}
+
+func addXNat(a *ast.Attribute, m map[string]*network, v6 bool, s *symbolTable,
+	ctx string, getIpX func(*ast.Attribute, bool, string) (net.IP, net.IPMask),
+) map[string]*network {
+
+	if !strings.HasPrefix(a.Name, "nat:") {
+		return nil
+	}
+	_, tag := splitCheckTypedName(a.Name)
+	nat := new(network)
+	natCtx := a.Name + " of " + ctx
+	l := getComplexValue(a, ctx)
+	for _, a2 := range l {
+		switch a2.Name {
+		case "ip":
+			nat.ip, nat.mask = getIpX(a2, v6, natCtx)
+		case "hidden":
+			nat.hidden = getFlag(a2, natCtx)
+		case "identity":
+			nat.identity = getFlag(a2, natCtx)
+		case "dynamic":
+			nat.dynamic = getFlag(a2, natCtx)
+		case "subnet_of":
+			nat.subnetOf = getNetworkRef(a2, s, natCtx)
+		default:
+			errMsg("Unexpected attribute in %s: %s", natCtx, a2.Name)
+		}
+	}
+	if nat.hidden {
+		for _, a2 := range l {
+			if a2.Name != "hidden" {
+				errMsg("Hidden NAT must not use attribute %s", a2.Name)
+			}
+		}
+
+		// This simplifies error checks for overlapping addresses.
+		nat.dynamic = true
+
+		// Provide an unusable address.
+		nat.ip = getZeroIp(v6)
+		nat.mask = getHostMask(v6)
+	} else if nat.identity {
+		for _, a2 := range l {
+			if a2.Name != "identity" {
+				errMsg("Identity NAT must not use attribute %s", a2.Name)
+			}
+		}
+		nat.dynamic = true
+	} else if nat.ip == nil {
+		errMsg("Missing IP address in %s", natCtx)
+	}
+
+	// Attribute {nat_tag} is used later to look up static translation
+	// of hosts inside a dynamically translated network.
+	nat.natTag = tag
+
+	nat.name = ctx
+	nat.descr = "nat:" + tag + " of objName"
+	if m == nil {
+		m = make(map[string]*network)
+	}
+	m[tag] = nat
+	return m
+}
+
+func addIPNat(a *ast.Attribute, m map[string]net.IP, v6 bool,
+	ctx string) map[string]net.IP {
+
+	if !strings.HasPrefix(a.Name, "nat:") {
+		return nil
+	}
+	_, name := splitCheckTypedName(a.Name)
+	var ip net.IP
+	natCtx := a.Name + " of " + ctx
+	l := getComplexValue(a, ctx)
+	for _, a2 := range l {
+		switch a2.Name {
+		case "ip":
+			ip = getIp(a2, v6, natCtx)
+		default:
+			errMsg("Unexpected attribute in %s: %s", natCtx, a2.Name)
+		}
+	}
+	if m == nil {
+		m = make(map[string]net.IP)
+	}
+	m[name] = ip
+	return m
+}
+
+// Store defining log tags in knownLog.
+func collectLog(m map[string]string) {
+	for tag, _ := range m {
+		knownLog[tag] = true
+	}
+}
+
+func checkInterfaceIp(intf *routerIntf, n *network) {
+	if intf.unnumbered {
+		if !n.unnumbered {
+			errMsg("Unnumbered %s must to be linked to %s", intf, n)
+		}
+		return
+	}
+	if n.unnumbered {
+		errMsg("%s must not be linked to unnumbered %s", intf, n)
+		return
+	}
+	if intf.negotiated || intf.bridged {
+		// Nothing to be checked: attribute 'bridged' is set automatically
+		// for an interface without IP and linked to bridged network.
+		return
+	}
+
+	// Check compatibility of interface IP and network IP/mask.
+	ip := intf.ip
+	nIP := n.ip
+	mask := n.mask
+	if !matchIp(ip, nIP, mask) {
+		errMsg("%s's IP doesn't match %s's IP/mask", intf, n)
+	}
+	if isHostMask(mask) {
+		warnMsg("%s has address of its network.\n"+
+			" Remove definition of %s and\n"+
+			" add attribute 'loopback' at interface definition.",
+			intf, n)
+	} else if !n.ipV6 {
+
+		// Check network and broadcast address only for IPv4,
+		// but not for /31 IPv4 (see RFC 3021).
+		len, _ := mask.Size()
+		if len != 31 {
+			if bytes.Compare(ip, nIP) == 0 {
+				errMsg("%s has address of its network", intf)
+			}
+			if bytes.Compare(ip, getBroadcastIP(n)) == 0 {
+				errMsg("%s has broadcast address", intf)
+			}
+		}
+	}
+}
+
+//############################################################################
+// Purpose  : Moves attribute 'no_in_acl' from interface to hardware because
+//            ACLs operate on hardware, not on logic. Marks hardware needing
+//            outgoing ACLs.
+// Comments : Not more than 1 'no_in_acl' interface per router allowed.
+func checkNoInAcl(r *router) {
+	count := 0
+	hasCrypto := false
+	var rerouteIntf *routerIntf
+
+	// Move attribute no_in_acl to hardware.
+	for _, intf := range r.interfaces {
+		if intf.spoke != nil || intf.hub != nil {
+			hasCrypto = true
+		}
+		if intf.reroutePermit != nil && !intf.noInAcl {
+			rerouteIntf = intf
+		}
+		if !intf.noInAcl {
+			continue
+		}
+		hw := intf.hardware
+
+		// Prevent duplicate error message.
+		if hw.noInAcl {
+			continue
+		}
+		hw.noInAcl = true
+
+		// Assure max number of main interfaces at no_in_acl-hardware == 1.
+		if nonSecondaryIntfCount(hw.interfaces) != 1 {
+			errMsg("Only one logical interface allowed at hardware '%s' of %s\n"+
+				" because of attribute 'no_in_acl'", hw.name, r.name)
+		}
+		count++
+
+		// Reference no_in_acl interface in router attribute.
+		r.noInAcl = intf
+	}
+	if count == 0 {
+		return
+	}
+
+	// Assert maximum number of 'no_in_acl' interfaces per router
+	if count != 1 {
+		errMsg("At most one interface of %s may use flag 'no_in_acl'", r)
+	}
+
+	// Assert router to support outgoing ACL
+	if !r.model.hasOutACL {
+		errMsg("%s doesn't support outgoing ACL", r)
+	}
+
+	// reroute_permit would generate permit any -> networks,
+	// but no_in_acl would generate permit any -> any anyway.
+	if r.noInAcl.reroutePermit != nil {
+		warnMsg("Useless use of attribute 'reroute_permit' together with"+
+			" 'no_in_acl' at %s", r.noInAcl.name)
+	}
+
+	// Must not use reroute_permit to network N together with no_in_acl.
+	// In this case incoming traffic at no_in_acl interface
+	// to network N wouldn't be filtered at all.
+	if rerouteIntf != nil {
+		errMsg("Must not use attributes no_in_acl and reroute_permit"+
+			" together at %s\n"+
+			" Add incoming and outgoing ACL line in raw file instead.", r)
+	}
+
+	// Assert router not to take part in crypto tunnels.
+	if hasCrypto {
+		errMsg(
+			"Don't use attribute 'no_in_acl' together with crypto tunnel at %s",
+			r)
+	}
+
+	// Mark other hardware with attribute 'need_out_acl'.
+	for _, hw := range r.hardware {
+		if !hw.noInAcl {
+			hw.needOutAcl = true
+		}
+	}
+}
+
+// No traffic must traverse crypto interface.
+// Hence split router into separate instances, one instance for each
+// crypto interface.
+// Split routers are tied by identical attribute .deviceName.
+func moveLockedIntf(intf *routerIntf) {
+	orig := intf.router
+
+	// Use different and uniqe name for each split router.
+	name := "router:" + intf.name[len("interface:"):]
+	new := *orig
+	new.name = name
+	new.origRouter = orig
+	new.interfaces = intfList{intf}
+	intf.router = &new
+	routerFragments = append(routerFragments, &new)
+
+	// Don't check fragment for reachability.
+	new.policyDistributionPoint = nil
+
+	// Remove interface from old router.
+	// Retain original interfaces.
+	l := orig.interfaces
+	if orig.origIntfs == nil {
+		orig.origIntfs = l
+	}
+	orig.interfaces = make(intfList, 0, len(l)-1)
+	for _, intf2 := range l {
+		if intf2 != intf {
+			orig.interfaces.push(intf2)
+		}
+	}
+
+	if orig.managed != "" {
+		hw := intf.hardware
+		new.hardware = []*hardware{hw}
+		l := orig.hardware
+		orig.origHardware = l
+		orig.hardware = make([]*hardware, 0, len(l)-1)
+		for _, hw2 := range l {
+			if hw2 != hw {
+				orig.hardware = append(orig.hardware, hw2)
+			}
+		}
+
+		for _, intf2 := range hw.interfaces {
+			if !intf2.tunnel {
+				errMsg("Crypto %s must not share hardware with other interfaces",
+					intf)
+				break
+			}
+		}
+
+		// Copy map, because it is changed per device later.
+		if m := orig.radiusAttributes; m != nil {
+			m2 := make(map[string]string)
+			for k, v := range m {
+				m2[k] = v
+			}
+			new.radiusAttributes = m2
+		}
+	}
+}

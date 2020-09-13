@@ -1,12 +1,14 @@
 package main
 
 import (
+	"github.com/hknutzen/Netspoc/go/pkg/conf"
 	"github.com/hknutzen/Netspoc/go/pkg/diag"
 	"github.com/hknutzen/Netspoc/go/pkg/pass1"
 )
 
 func main() {
-	pass1.ImportFromPerl()
+	inDir, outDir := conf.GetArgs()
+	pass1.ReadNetspoc(inDir)
 	pass1.MarkDisabled()
 	pass1.SetZone()
 	pass1.SetPath()
@@ -35,11 +37,11 @@ func main() {
 	pass1.ExpandCrypto()
 	pass1.FindActiveRoutes()
 	pass1.GenReverseRules()
-	if pass1.OutDir != "" {
+	if outDir != "" {
 		pass1.MarkSecondaryRules()
 		pass1.RulesDistribution()
-		pass1.PrintCode(pass1.OutDir)
-		pass1.CopyRaw(pass1.InPath, pass1.OutDir)
+		pass1.PrintCode(outDir)
+		pass1.CopyRaw(inDir, outDir)
 	}
 	pass1.AbortOnError()
 	diag.Progress("Finished pass1")

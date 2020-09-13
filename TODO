@@ -4,3 +4,5 @@ Do we really need attribute 'zone' in router?
 
 Set attribute 'zoneCluster' also for simple cluster with only one element?
 Or use small function to get list of cluster elements.
+
+Inefficient delElement + delTuple in path-walk.go

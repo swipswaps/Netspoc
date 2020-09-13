@@ -5,6 +5,5 @@ import (
 )
 
 func main() {
-	pass1.ImportFromPerl()
 	pass1.Export()
 }

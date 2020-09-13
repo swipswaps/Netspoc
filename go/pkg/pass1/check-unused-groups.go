@@ -21,25 +21,25 @@ func CheckUnusedGroups() {
 		}
 		// Check protocolGroups
 		names = names[:0]
-		for name := range protocolGroups {
+		for name := range symTable.protocolgroup {
 			names = append(names, name)
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			group := protocolGroups[name]
+			group := symTable.protocolgroup[name]
 			if !group.isUsed {
 				warnOrErrMsg(printType, "unused "+group.name)
 			}
 		}
 	}
 	if printType := conf.Conf.CheckUnusedProtocols; printType != "" {
-		names := make([]string, 0, len(protocols))
-		for name := range protocols {
+		names := make([]string, 0, len(symTable.protocol))
+		for name := range symTable.protocol {
 			names = append(names, name)
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			prt := protocols[name]
+			prt := symTable.protocol[name]
 			if !prt.isUsed {
 				warnOrErrMsg(printType, "unused "+prt.name)
 			}

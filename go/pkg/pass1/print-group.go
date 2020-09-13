@@ -91,6 +91,7 @@ import (
 	"bytes"
 	"fmt"
 	"github.com/hknutzen/Netspoc/go/pkg/abort"
+	"github.com/hknutzen/Netspoc/go/pkg/ast"
 	"github.com/hknutzen/Netspoc/go/pkg/conf"
 	"io"
 	"net"
@@ -199,7 +200,7 @@ func captureStderr(f func()) string {
 }
 
 // Try to expand group as IPv4 or IPv6, but don't abort on error.
-func tryExpand(parsed []*parsedObjRef, ipv6 bool) groupObjList {
+func tryExpand(parsed []ast.Element, ipv6 bool) groupObjList {
 	var expanded groupObjList
 	stderr := captureStderr(func() {
 		expanded = expandGroup(parsed, "print-group", ipv6, true)
@@ -211,20 +212,20 @@ func tryExpand(parsed []*parsedObjRef, ipv6 bool) groupObjList {
 	return expanded
 }
 
-func PrintGroup(m xMap) {
+func PrintGroup() {
 	MarkDisabled()
 	SetZone()
 	SetPath()
 	DistributeNatInfo()
 	FindSubnetsInZone()
 	AbortOnError()
-	natNet := getString(m["nat_net"])
-	parsed := convParsedObjRefs(m["parsed"])
-	showIP := getBool(m["show_ip"])
-	showName := getBool(m["show_name"])
-	showOwner := getBool(m["show_owner"])
-	showAdmins := getBool(m["show_admins"])
-	showUnused := getBool(m["show_unused"])
+	var natNet string        // := getString(m["nat_net"])
+	var parsed []ast.Element //:= convParsedObjRefs(m["parsed"])
+	var showIP bool          // := getBool(m["show_ip"])
+	var showName bool        // := getBool(m["show_name"])
+	var showOwner bool       //:= getBool(m["show_owner"])
+	var showAdmins bool      // := getBool(m["show_admins"])
+	var showUnused bool      // := getBool(m["show_unused"])
 
 	// Find network for resolving NAT addresses.
 	var natSet natSet

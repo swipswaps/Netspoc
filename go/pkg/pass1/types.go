@@ -2,6 +2,7 @@ package pass1
 
 import (
 	"fmt"
+	"github.com/hknutzen/Netspoc/go/pkg/ast"
 	"net"
 )
 
@@ -23,14 +24,9 @@ type aggExt struct {
 	mask net.IPMask
 }
 
-type parsedObjRef struct {
-	typ  string
-	name interface{}
-	ext  interface{}
-}
-
 type userInfo struct {
 	elements groupObjList
+	used     bool
 }
 
 type netOrRouter interface{}
@@ -76,7 +72,7 @@ type srvObj interface {
 	getNetwork() *network
 	getUsed() bool
 	setUsed()
-	setCommon(m xMap) // for importFromPerl
+	//	setCommon(m xMap) // for importFromPerl
 }
 type srvObjList []srvObj
 
@@ -92,7 +88,7 @@ type someObj interface {
 	getAttr(attr string) string
 	getPathNode() pathStore
 	getZone() *zone
-	setCommon(m xMap) // for importFromPerl
+	//setCommon(m xMap) // for importFromPerl
 }
 
 type disabledObj struct {
@@ -158,7 +154,7 @@ type network struct {
 	hidden               bool
 	hosts                []*host
 	identity             bool
-	interfaces           []*routerIntf
+	interfaces           intfList
 	invisible            bool
 	isAggregate          bool
 	isLayer3             bool
@@ -175,6 +171,7 @@ type network struct {
 	radiusAttributes     map[string]string
 	subnetOf             *network
 	subnets              []*subnet
+	unnumbered           bool
 	unstableNat          map[natSet]netList
 	up                   *network
 	zone                 *zone
@@ -227,24 +224,32 @@ type host struct {
 }
 
 type model struct {
-	commentChar     string
-	class           string
-	crypto          string
-	doAuth          bool
-	canObjectgroup  bool
-	cryptoInContext bool
-	filter          string
-	logModifiers    map[string]string
-	name            string
-	needAcl         bool
-	hasIoAcl        bool
-	noCryptoFilter  bool
-	printRouterIntf bool
-	routing         string
-	stateless       bool
-	statelessSelf   bool
-	statelessICMP   bool
-	usePrefix       bool
+	commentChar      string
+	class            string
+	crypto           string
+	doAuth           bool
+	canACLUseRealIP  bool
+	canDynCrypto     bool
+	canLogDeny       bool
+	canObjectgroup   bool
+	canVRF           bool
+	cryptoInContext  bool
+	filter           string
+	hasIoACL         bool
+	hasOutACL        bool
+	inversedACLMask  bool
+	logModifiers     map[string]string
+	name             string
+	needACL          bool
+	needProtect      bool
+	noFilterICMPCode bool
+	noCryptoFilter   bool
+	printRouterIntf  bool
+	routing          string
+	stateless        bool
+	statelessSelf    bool
+	statelessICMP    bool
+	usePrefix        bool
 }
 
 // Use pointer to map, because we need to test natSet for equality,
@@ -333,6 +338,7 @@ type routerIntf struct {
 	spoke              *crypto
 	id                 string
 	isHub              bool
+	isLayer3           bool
 	hardware           *hardware
 	layer3Intf         *routerIntf
 	loop               *loop
@@ -341,16 +347,19 @@ type routerIntf struct {
 	loopZoneBorder     bool
 	mainIntf           *routerIntf
 	natSet             natSet
+	noCheck            bool
+	noInAcl            bool
 	origMain           *routerIntf
 	pathRestrict       []*pathRestriction
 	peer               *routerIntf
 	peerNetworks       netList
 	realIntf           *routerIntf
+	redundancyId       string
 	redundancyIntfs    []*routerIntf
 	redundancyType     string
 	redundant          bool
 	reroutePermit      netList
-	reroutePermitNames []*parsedObjRef
+	reroutePermitNames []ast.Element
 	routeInZone        map[*network]intfList
 	routes             map[*routerIntf]netMap
 	routing            *routing
@@ -380,6 +389,7 @@ type owner struct {
 	hideFromOuterOwners bool
 	isUsed              bool
 	name                string
+	onlyWatch           bool
 	showAll             bool
 	showHiddenOwners    bool
 	watchers            stringList
@@ -397,7 +407,7 @@ type xxrp struct {
 }
 
 type hardware struct {
-	interfaces []*routerIntf
+	interfaces intfList
 	crosslink  bool
 	loopback   bool
 	name       string
@@ -561,12 +571,10 @@ type complexProto struct {
 	orig *proto
 }
 
-type protoOrName interface{}
-
 type protoGroup struct {
 	usedObj
 	name      string
-	pairs     []protoOrName
+	list      stringList
 	elements  protoList
 	recursive bool
 }
@@ -581,7 +589,7 @@ type protoLookup struct {
 
 type objGroup struct {
 	usedObj
-	elements        []*parsedObjRef
+	elements        []ast.Element
 	expandedClean   groupObjList
 	expandedNoClean groupObjList
 	ipVxObj
@@ -616,7 +624,7 @@ type service struct {
 	silentUnenforceable        bool
 	subOwner                   *owner
 	unknownOwner               bool
-	user                       []*parsedObjRef
+	user                       []ast.Element
 	expandedUser               groupObjList
 }
 
@@ -625,10 +633,10 @@ func (x *service) String() string { return x.name }
 type unexpRule struct {
 	hasUser string
 	action  string
-	dst     []*parsedObjRef
+	dst     []ast.Element
 	log     string
-	prt     []protoOrName
-	src     []*parsedObjRef
+	prt     protoList
+	src     []ast.Element
 	service *service
 }
 

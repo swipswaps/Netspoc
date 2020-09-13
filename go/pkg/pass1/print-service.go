@@ -114,16 +114,16 @@ func prtInfo(srcRange, prt *proto) string {
 	return desc
 }
 
-func PrintService(m xMap) {
+func PrintService() {
 	MarkDisabled()
 	SetZone()
 	SetPath()
 	DistributeNatInfo()
 	FindSubnetsInZone()
 	AbortOnError()
-	natNet := getString(m["nat_net"])
-	showName := getBool(m["show_name"])
-	srvNames := getStrings(m["service_names"])
+	var natNet string       //:= getString(m["nat_net"])
+	var showName bool       //:= getBool(m["show_name"])
+	var srvNames stringList //:= getStrings(m["service_names"])
 
 	// Find network for resolving NAT addresses.
 	var natSet natSet

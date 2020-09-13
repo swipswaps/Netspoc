@@ -1,15 +1,13 @@
 package pass1
 
-func expandProtocols(list []protoOrName, ctx string) []*proto {
+/*
+func expandProtocols(list stringList, ctx string) []*proto {
 	result := make(protoList, 0)
-	for _, pair := range list {
-		switch p := pair.(type) {
+	for _, v := range list {
 
 		// Handle anonymous protocol.
-		case *proto:
-			result.push(p)
+		result.push(p)
 
-		case []string:
 			typ, name := p[0], p[1]
 			switch typ {
 			case "protocol":
@@ -36,7 +34,7 @@ func expandProtocols(list []protoOrName, ctx string) []*proto {
 						// Detect recursive definitions.
 						prtgroup.recursive = true
 						prtgroup.elements =
-							expandProtocols(prtgroup.pairs, typ+":"+name)
+							expandProtocols(prtgroup.list, typ+":"+name)
 						prtgroup.recursive = false
 					}
 					result = append(result, prtgroup.elements...)
@@ -52,7 +50,7 @@ func expandProtocols(list []protoOrName, ctx string) []*proto {
 	}
 	return result
 }
-
+*/
 func expandSplitProtocol(p *proto) protoList {
 
 	// Handle unset srcRange.

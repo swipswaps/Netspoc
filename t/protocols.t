@@ -36,7 +36,7 @@ network:n1 = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Error: Unknown protocol 'xyz' at line 1 of STDIN
+Error: Unknown protocol 'xyz' in protocol:test
 END
 
 test_err($title, $in, $out);
@@ -50,7 +50,7 @@ protocol:test = tcp 80 -
 END
 
 $out = <<'END';
-Syntax error: Missing second port in port range at line 2 of STDIN, at EOF
+Syntax error: Expected ';' at line 1 of STDIN, at EOF
 END
 
 test_err($title, $in, $out);
@@ -70,13 +70,13 @@ network:n1 = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Error: Invalid port number '0' at line 1 of STDIN
-Error: Too large port number 99999 at line 2 of STDIN
-Error: Too large port number 100100 at line 3 of STDIN
-Error: Too large port number 100102 at line 3 of STDIN
-Error: Invalid port range 90-80 at line 4 of STDIN
-Error: Invalid port number '0' at line 5 of STDIN
-Error: Invalid port number '0' at line 5 of STDIN
+Error: Expected port number > 0 in protocol:p1
+Error: Expected port number < 65536 in protocol:p2
+Error: Expected port number < 65536 in protocol:p3
+Error: Expected port number < 65536 in protocol:p3
+Error: Invalid port range in protocol:p4
+Error: Expected port number > 0 in protocol:p5
+Error: Expected port number > 0 in protocol:p5
 Error: Too large port number 77777 at line 6 of STDIN
 Error: Invalid port number '0' at line 6 of STDIN
 END
@@ -117,7 +117,7 @@ network:n1 = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Error: Unknown modifier 'src_xyz' at line 1 of STDIN
+Error: Unknown modifier 'src_xyz' in protocol:test
 END
 
 test_err($title, $in, $out);
@@ -248,7 +248,7 @@ network:n1 = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Error: Too large ICMP type 3000 at line 1 of STDIN
+Error: Expected number < 256 in protocol:test
 END
 
 test_err($title, $in, $out);
@@ -262,7 +262,7 @@ protocol:test = icmp 3 /
 END
 
 $out = <<'END';
-Syntax error: Expected ICMP code at line 2 of STDIN, at EOF
+Syntax error: Expected ';' at line 1 of STDIN, at EOF
 END
 
 test_err($title, $in, $out);
@@ -277,7 +277,7 @@ network:n1 = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Error: Too large ICMP code 999 at line 1 of STDIN
+Error: Expected number < 256 in protocol:test
 END
 
 test_err($title, $in, $out);
@@ -319,7 +319,7 @@ protocol:test = proto
 END
 
 $out = <<'END';
-Syntax error: Expected protocol number at line 2 of STDIN, at EOF
+Syntax error: Expected ';' at line 1 of STDIN, at EOF
 END
 
 test_err($title, $in, $out);
@@ -335,8 +335,8 @@ network:n1 = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Error: Invalid protocol number '0' at line 1 of STDIN
-Error: Too large protocol number 300 at line 2 of STDIN
+Error: Expected number > 0 in protocol:test1
+Error: Expected number < 256 in protocol:test2
 END
 
 test_err($title, $in, $out);
@@ -378,8 +378,8 @@ protocol:UDP  = proto 17;
 END
 
 $out = <<'END';
-Error: Must not use 'proto 4', use 'tcp' instead at line 2 of STDIN
-Error: Must not use 'proto 17', use 'udp' instead at line 3 of STDIN
+Error: Must not use 'proto 4', use 'tcp' instead in protocol:TCP
+Error: Must not use 'proto 17', use 'udp' instead in protocol:UDP
 END
 
 test_err($title, $in, $out);

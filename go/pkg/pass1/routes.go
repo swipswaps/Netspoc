@@ -7,8 +7,6 @@ import (
 	"strings"
 )
 
-var routingInfo map[string]*routing
-
 func intfListEq(l1, l2 []*routerIntf) bool {
 	if len(l1) != len(l2) {
 		return false

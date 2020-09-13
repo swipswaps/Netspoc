@@ -126,7 +126,7 @@ func defaultOptions(fs *flag.FlagSet) *Config {
 		CheckUnusedOwners: "warn",
 
 		// Check for unused protocol definitions.
-		CheckUnusedProtocols: "no",
+		CheckUnusedProtocols: "",
 
 		// Allow subnets only
 		// if the enclosing network is marked as 'has_subnets' or
@@ -141,10 +141,10 @@ func defaultOptions(fs *flag.FlagSet) *Config {
 
 		// Check for redundant rules.
 		CheckRedundantRules:      "warn",
-		CheckFullyRedundantRules: "no",
+		CheckFullyRedundantRules: "",
 
 		// Check for services where owner can't be derived.
-		CheckServiceUnknownOwner: "no",
+		CheckServiceUnknownOwner: "",
 
 		// Check for services where multiple owners have been derived.
 		CheckServiceMultiOwner: "warn",
@@ -157,7 +157,7 @@ func defaultOptions(fs *flag.FlagSet) *Config {
 
 		// Check, that all managed routers have attribute
 		// 'policy_distribution_point', either directly or from inheritance.
-		CheckPolicyDistributionPoint: "no",
+		CheckPolicyDistributionPoint: "",
 
 		// Optimize the number of routing entries per router:
 		// For each router find the hop, where the largest
