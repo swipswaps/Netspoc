@@ -9,14 +9,16 @@ import (
 func main() {
 	inDir, outDir := conf.GetArgs()
 	pass1.ReadNetspoc(inDir)
+	pass1.AbortOnError()
 	pass1.MarkDisabled()
+	pass1.CheckIPAdresses()
 	pass1.SetZone()
 	pass1.SetPath()
 	NATDomains, NATTag2natType, _ := pass1.DistributeNatInfo()
 	pass1.FindSubnetsInZone()
 	// Call after findSubnetsInZone, where zone.networks has
 	// been set up.
-	pass1.LinkReroutePermit()
+	pass1.CheckReroutePermit()
 	pass1.NormalizeServices()
 	pass1.AbortOnError()
 

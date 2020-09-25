@@ -84,7 +84,7 @@ type someObj interface {
 	String() string
 	getNetwork() *network
 	getUp() someObj
-	address(nn natSet) net.IPNet
+	address(nn natSet) *net.IPNet
 	getAttr(attr string) string
 	getPathNode() pathStore
 	getZone() *zone
@@ -268,7 +268,7 @@ type aclInfo struct {
 	filterAnySrc bool
 	isStdACL     bool
 	isCryptoACL  bool
-	needProtect  []net.IPNet
+	needProtect  []*net.IPNet
 	subAclList   []*aclInfo
 }
 
@@ -292,7 +292,7 @@ type router struct {
 	crosslinkIntfs          []*routerIntf
 	disabled                bool
 	extendedKeys            map[string]string
-	filterOnly              []net.IPNet
+	filterOnly              []*net.IPNet
 	generalPermit           []*proto
 	natDomains              []*natDomain
 	natTags                 map[*natDomain]stringList
@@ -330,46 +330,45 @@ type loop struct {
 type routerIntf struct {
 	netObj
 	pathStoreData
-	router             *router
-	crypto             *crypto
-	dhcpClient         bool
-	dhcpServer         bool
-	hub                []*crypto
-	spoke              *crypto
-	id                 string
-	isHub              bool
-	isLayer3           bool
-	hardware           *hardware
-	layer3Intf         *routerIntf
-	loop               *loop
-	loopback           bool
-	loopEntryZone      map[pathStore]pathStore
-	loopZoneBorder     bool
-	mainIntf           *routerIntf
-	natSet             natSet
-	noCheck            bool
-	noInAcl            bool
-	origMain           *routerIntf
-	pathRestrict       []*pathRestriction
-	peer               *routerIntf
-	peerNetworks       netList
-	realIntf           *routerIntf
-	redundancyId       string
-	redundancyIntfs    []*routerIntf
-	redundancyType     string
-	redundant          bool
-	reroutePermit      netList
-	reroutePermitNames []ast.Element
-	routeInZone        map[*network]intfList
-	routes             map[*routerIntf]netMap
-	routing            *routing
-	rules              ruleList
-	splitOther         *routerIntf
-	intfRules          ruleList
-	outRules           ruleList
-	idRules            map[string]*idIntf
-	toZone1            pathObj
-	zone               *zone
+	router          *router
+	crypto          *crypto
+	dhcpClient      bool
+	dhcpServer      bool
+	hub             []*crypto
+	spoke           *crypto
+	id              string
+	isHub           bool
+	isLayer3        bool
+	hardware        *hardware
+	layer3Intf      *routerIntf
+	loop            *loop
+	loopback        bool
+	loopEntryZone   map[pathStore]pathStore
+	loopZoneBorder  bool
+	mainIntf        *routerIntf
+	natSet          natSet
+	noCheck         bool
+	noInAcl         bool
+	origMain        *routerIntf
+	pathRestrict    []*pathRestriction
+	peer            *routerIntf
+	peerNetworks    netList
+	realIntf        *routerIntf
+	redundancyId    string
+	redundancyIntfs []*routerIntf
+	redundancyType  string
+	redundant       bool
+	reroutePermit   netList
+	routeInZone     map[*network]intfList
+	routes          map[*routerIntf]netMap
+	routing         *routing
+	rules           ruleList
+	splitOther      *routerIntf
+	intfRules       ruleList
+	outRules        ruleList
+	idRules         map[string]*idIntf
+	toZone1         pathObj
+	zone            *zone
 }
 
 type intfList []*routerIntf

@@ -58,35 +58,35 @@ func getNatNetwork(network *network, natSet natSet) *network {
 	return network
 }
 
-func (obj *network) address(nn natSet) net.IPNet {
+func (obj *network) address(nn natSet) *net.IPNet {
 	network := getNatNetwork(obj, nn)
-	return net.IPNet{IP: network.ip, Mask: network.mask}
+	return &net.IPNet{IP: network.ip, Mask: network.mask}
 }
 
-func (obj *subnet) address(nn natSet) net.IPNet {
+func (obj *subnet) address(nn natSet) *net.IPNet {
 	network := getNatNetwork(obj.network, nn)
 	return natAddress(obj.ip, obj.mask, obj.nat, network, obj.network.ipV6)
 }
 
-func (obj *routerIntf) address(nn natSet) net.IPNet {
+func (obj *routerIntf) address(nn natSet) *net.IPNet {
 	network := getNatNetwork(obj.network, nn)
 	if obj.negotiated {
-		return net.IPNet{IP: network.ip, Mask: network.mask}
+		return &net.IPNet{IP: network.ip, Mask: network.mask}
 	}
 	ipV6 := obj.network.ipV6
 	return natAddress(obj.ip, getHostMask(ipV6), obj.nat, network, ipV6)
 }
 
-func natAddress(ip net.IP, mask net.IPMask, nat map[string]net.IP, network *network, ipV6 bool) net.IPNet {
+func natAddress(ip net.IP, mask net.IPMask, nat map[string]net.IP, network *network, ipV6 bool) *net.IPNet {
 	if network.dynamic {
 		natTag := network.natTag
 		if ip, ok := nat[natTag]; ok {
 
 			// Single static NAT IP for this interface.
-			return net.IPNet{IP: ip, Mask: getHostMask(ipV6)}
+			return &net.IPNet{IP: ip, Mask: getHostMask(ipV6)}
 		} else {
-			return net.IPNet{IP: network.ip, Mask: network.mask}
+			return &net.IPNet{IP: network.ip, Mask: network.mask}
 		}
 	}
-	return net.IPNet{IP: mergeIP(ip, network), Mask: mask}
+	return &net.IPNet{IP: mergeIP(ip, network), Mask: mask}
 }

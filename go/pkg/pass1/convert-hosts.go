@@ -27,6 +27,9 @@ func splitIpRange(lo, hi net.IP, context string) []net.IPNet {
 		}
 		l, h = binary.BigEndian.Uint64(lo[8:]), binary.BigEndian.Uint64(hi[8:])
 	}
+	if l >= h {
+		errMsg("Invalid IP range in %s", context)
+	}
 	var result []net.IPNet
 	add := func(i, m uint64) {
 		var ip net.IP
@@ -128,7 +131,7 @@ func convertHosts() {
 				}
 			} else {
 				// Convert range.
-				nets = splitIpRange(host.ipRange[0], host.ipRange[1], host.name)
+				nets = splitIpRange(host.ipRange[0], host.ipRange[1], name)
 				if id != "" {
 					if len(nets) > 1 {
 						errMsg("Range of %s with ID must expand to exactly one subnet",

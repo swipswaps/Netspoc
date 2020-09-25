@@ -19,24 +19,24 @@ var (
 
 	knownLog = make(map[string]bool)
 
-	aggregates map[string]*network
-	areas      map[string]*area
-	cryptoMap  map[string]*crypto
-	groups     map[string]*objGroup
-	hosts      map[string]*host
-	interfaces map[string]*routerIntf
-	ipsecMap   map[string]*ipsec
-	isakmpMap  map[string]*isakmp
-	networks   map[string]*network
+	//aggregates map[string]*network
+	//areas     map[string]*area
+	cryptoMap map[string]*crypto
+	//groups     map[string]*objGroup
+	//hosts      map[string]*host
+	//interfaces map[string]*routerIntf
+	ipsecMap  map[string]*ipsec
+	isakmpMap map[string]*isakmp
+	//networks  map[string]*network
 	//	owners           map[string]*owner
-	pathrestrictions map[string]*pathRestriction
+	pathrestrictions []*pathRestriction
 	//	protocols        map[string]*proto
 	//	protocolGroups   map[string]*protoGroup
-	routers  map[string]*router
-	routers6 map[string]*router
+	//routers  map[string]*router
+	//routers6 map[string]*router
 	services map[string]*service
 
-	prtMap  protoLookup
+	prtMap  *protoLookup
 	pRules  pathRules
 	sRules  = new(serviceRules)
 	userObj userInfo

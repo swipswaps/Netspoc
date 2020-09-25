@@ -199,22 +199,15 @@ func classifyProtocols(l []interface{}) (protoList, []*modifiedProto) {
 	return simple, complex
 }
 
-func normalizeSrcDstList(r *unexpRule, s *service) [][2]srvObjList {
+func normalizeSrcDstList(
+	r *unexpRule, l groupObjList, s *service) [][2]srvObjList {
+
 	ctx := s.name
 	ipv6 := s.ipV6
-	userObj.used = false
+	userObj.elements = l
 	srcList := expandGroupInRule(r.src, "src of rule in "+ctx, ipv6)
-	srcUser := userObj.used
-	userObj.used = false
 	dstList := expandGroupInRule(r.dst, "dst of rule in "+ctx, ipv6)
-	dstUser := userObj.used
-	if !(srcUser || dstUser) {
-		errMsg("Each rule of %s must use keyword 'user'", s.name)
-	}
-	if s.foreach && !(srcUser && dstUser) {
-		warnMsg("Each rule of %s should reference 'user' in 'src' and 'dst'\n",
-			" because service has keyword 'foreach'", s.name)
-	}
+	userObj.elements = nil
 
 	// Expand auto interfaces in srcList.
 	expSrcList, extraSrcDst := substituteAutoIntf(srcList, dstList, ctx)
@@ -262,8 +255,6 @@ func normalizeServiceRules(s *service) {
 	ipv6 := s.ipV6
 	ctx := s.name
 	user := expandGroup(s.user, "user of "+ctx, ipv6, false)
-	userObj.elements = user
-	defer func() { userObj.elements = nil }()
 	s.expandedUser = user
 	ruleCount := 0
 
@@ -285,7 +276,7 @@ func normalizeServiceRules(s *service) {
 		}
 		simplePrtList, complexPrtList := classifyProtocols(prtList)
 		process := func(elt groupObjList) {
-			srcDstListPairs := normalizeSrcDstList(uRule, s)
+			srcDstListPairs := normalizeSrcDstList(uRule, elt, s)
 			for _, srcDstList := range srcDstListPairs {
 				srcList, dstList := srcDstList[0], srcDstList[1]
 				if srcList != nil || dstList != nil {
@@ -358,16 +349,6 @@ func NormalizeServices() {
 	diag.Progress("Normalizing services")
 
 	var names stringList
-	for n, _ := range symTable.group {
-		names.push(n)
-	}
-	sort.Strings(names)
-	for _, n := range names {
-		g := symTable.group[n]
-		g.expandedClean = expandGroup(g.elements, g.name, g.ipV6, false)
-	}
-
-	names = nil
 	for n, _ := range symTable.service {
 		names.push(n)
 	}

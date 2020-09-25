@@ -36,7 +36,7 @@ network:n1 = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Error: Unknown protocol 'xyz' in protocol:test
+Error: Unknown protocol in protocol:test
 END
 
 test_err($title, $in, $out);
@@ -56,7 +56,7 @@ END
 test_err($title, $in, $out);
 
 ############################################################
-$title = 'Invalid ports and port ranges';
+$title = 'Invalid ports and port ranges (1)';
 ############################################################
 
 $in = <<'END';
@@ -65,7 +65,6 @@ protocol:p2 = udp 60000 - 99999;
 protocol:p3 = udp 100100 - 100102;
 protocol:p4 = tcp 90 - 80;
 protocol:p5 = tcp 0 - 0;
-protocolgroup:g1 = tcp 77777, udp 0;
 network:n1 = { ip = 10.1.1.0/24; }
 END
 
@@ -77,8 +76,28 @@ Error: Expected port number < 65536 in protocol:p3
 Error: Invalid port range in protocol:p4
 Error: Expected port number > 0 in protocol:p5
 Error: Expected port number > 0 in protocol:p5
-Error: Too large port number 77777 at line 6 of STDIN
-Error: Invalid port number '0' at line 6 of STDIN
+END
+
+test_err($title, $in, $out);
+
+############################################################
+$title = 'Invalid ports and port ranges (2)';
+############################################################
+
+$in = <<'END';
+protocolgroup:g1 = tcp 77777, udp -1, udp 0, icmp +3;
+network:n1 = { ip = 10.1.1.0/24; }
+service:s1 = {
+ user = network:n1;
+ permit src = user; dst = user; prt = protocolgroup:g1;
+}
+END
+
+$out = <<'END';
+Error: Expected port number < 65536 in 'tcp 77777' of protocolgroup:g1
+Error: Invalid port range in 'udp - 1' of protocolgroup:g1
+Error: Expected port number > 0 in 'udp 0' of protocolgroup:g1
+Error: Expected [TYPE [ / CODE]] in 'icmp + 3' of protocolgroup:g1
 END
 
 test_err($title, $in, $out);
@@ -335,7 +354,7 @@ network:n1 = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Error: Expected number > 0 in protocol:test1
+Error: Invalid protocol number '0' in protocol:test1
 Error: Expected number < 256 in protocol:test2
 END
 
@@ -554,7 +573,7 @@ END
 $out = <<'END';
 Error: Can't resolve reference to protocol:p1 in protocolgroup:g1
 Error: Can't resolve reference to protocolgroup:g2 in protocolgroup:g1
-Error: Unknown type of foo:bar in protocolgroup:g1
+Error: Unknown protocol in 'foo:bar' of protocolgroup:g1
 Error: Can't resolve reference to protocol:p1 in service:s1
 END
 

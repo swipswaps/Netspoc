@@ -371,7 +371,6 @@ func CutNetspoc() {
 	SetPath()
 	DistributeNatInfo()
 	FindSubnetsInZone()
-	LinkReroutePermit()
 	NormalizeServices()
 	permitRules, denyRules := ConvertHostsInRules()
 	GroupPathRules(permitRules, denyRules)
@@ -427,16 +426,16 @@ func CutNetspoc() {
 			addLater.push(intf)
 		}
 	}
-	for _, x := range networks {
+	for _, x := range symTable.network {
 		collectNegated(x)
 	}
-	for _, x := range hosts {
+	for _, x := range symTable.host {
 		collectNegated(x)
 	}
-	for _, x := range interfaces {
+	for _, x := range symTable.routerIntf {
 		collectNegated(x)
 	}
-	for _, x := range aggregates {
+	for _, x := range symTable.aggregate {
 		collectNegated(x)
 	}
 
@@ -456,7 +455,7 @@ func CutNetspoc() {
 	}
 
 	// Mark zones having attributes that influence their networks.
-	for _, n := range networks {
+	for _, n := range symTable.network {
 		if !n.isUsed {
 			continue
 		}
@@ -507,7 +506,7 @@ func CutNetspoc() {
 
 	// Mark interfaces / networks which are referenced by used areas.
 	var emptyAreas stringList
-	for _, a := range areas {
+	for _, a := range symTable.area {
 		if !a.isUsed {
 			continue
 		}
@@ -548,7 +547,7 @@ func CutNetspoc() {
 	}
 
 	// Mark networks having NAT attributes that influence their subnets.
-	for _, n := range networks {
+	for _, n := range symTable.network {
 		if !n.isUsed {
 			continue
 		}
@@ -632,7 +631,7 @@ func CutNetspoc() {
 	}
 
 	// Mark bridge and bridged networks.
-	for _, n := range networks {
+	for _, n := range symTable.network {
 		if !n.isUsed {
 			continue
 		}
@@ -698,10 +697,10 @@ func CutNetspoc() {
 			}
 		}
 	}
-	for _, r := range routers {
+	for _, r := range symTable.router {
 		mark1(r)
 	}
-	for _, r := range routers6 {
+	for _, r := range symTable.router6 {
 		mark1(r)
 	}
 
@@ -779,16 +778,16 @@ func CutNetspoc() {
 			}
 		}
 	}
-	for _, r := range routers {
+	for _, r := range symTable.router {
 		mark2(r)
 	}
-	for _, r := range routers6 {
+	for _, r := range symTable.router6 {
 		mark2(r)
 	}
 
 	// Remove definitions of unused hosts from networks.
 	diag.Progress("Removing unused hosts")
-	for _, n := range networks {
+	for _, n := range symTable.network {
 		if !n.isUsed {
 			continue
 		}
@@ -850,10 +849,10 @@ func CutNetspoc() {
 			removeAttributeSrcCode(name, r)
 		}
 	}
-	for _, r := range routers {
+	for _, r := range symTable.router {
 		removeIntf(r)
 	}
-	for _, r := range routers6 {
+	for _, r := range symTable.router6 {
 		removeIntf(r)
 	}
 
@@ -879,19 +878,19 @@ func CutNetspoc() {
 			removeAttributeSrcCode("owner", ob)
 		}
 	}
-	for _, x := range networks {
+	for _, x := range symTable.network {
 		removeOwner(x)
 	}
-	for _, x := range routers {
+	for _, x := range symTable.router {
 		removeOwner(x)
 	}
-	for _, x := range routers6 {
+	for _, x := range symTable.router6 {
 		removeOwner(x)
 	}
-	for _, x := range areas {
+	for _, x := range symTable.area {
 		removeOwner(x)
 	}
-	for _, x := range aggregates {
+	for _, x := range symTable.aggregate {
 		removeOwner(x)
 	}
 
@@ -905,7 +904,7 @@ func CutNetspoc() {
 
 	// Remove attribute 'router_attributes'
 	// with 'owner', 'policy_distribution_point' and 'general_permit'.
-	for _, a := range areas {
+	for _, a := range symTable.area {
 		if a.isUsed && a.routerAttributes != nil {
 			removeAttributeSrcCode("router_attributes", a)
 		}
@@ -920,10 +919,10 @@ func CutNetspoc() {
 			removeAttributeSrcCode("policy_distribution_point", r)
 		}
 	}
-	for _, r := range routers {
+	for _, r := range symTable.router {
 		removePdp(r)
 	}
-	for _, r := range routers6 {
+	for _, r := range symTable.router6 {
 		removePdp(r)
 	}
 
@@ -952,22 +951,22 @@ func CutNetspoc() {
 			defs = append(defs, ob)
 		}
 	}
-	for _, x := range routers {
+	for _, x := range symTable.router {
 		add(x)
 	}
-	for _, x := range routers6 {
+	for _, x := range symTable.router6 {
 		add(x)
 	}
-	for _, x := range networks {
+	for _, x := range symTable.network {
 		add(x)
 	}
-	for _, x := range aggregates {
+	for _, x := range symTable.aggregate {
 		add(x)
 	}
-	for _, x := range areas {
+	for _, x := range symTable.area {
 		add(x)
 	}
-	for _, x := range groups {
+	for _, x := range symTable.group {
 		add(x)
 	}
 	for _, x := range symTable.protocol {

@@ -18,7 +18,7 @@ network:n1 = { ip = 10.1.1.0o/24; }
 END
 
 $out = <<'END';
-Error: Invalid IP address in 'ip' of network:n1: 10.1.1.0o
+Error: invalid CIDR address: 10.1.1.0o/24 in 'ip' of network:n1
 END
 
 test_err($title, $in, $out);
@@ -654,15 +654,32 @@ END
 test_err($title, $in, $out);
 
 ############################################################
+$title = "Ignore cert_id";
+############################################################
+
+$in = <<'END';
+network:n = { ip = 10.1.1.0/24; cert_id = a.b.c; }
+END
+
+$out = <<'END';
+Warning: Ignoring 'cert_id' at network:n
+END
+
+test_warn($title, $in, $out);
+
+############################################################
 $title = "Bad cert_id";
 ############################################################
 
 $in = <<'END';
-network:n = { ip = 10.1.1.0/24; cert_id = @b.c; }
+network:n = {
+ ip = 10.1.1.0/24; cert_id = @b.c;
+ host:h = { ip = 10.1.1.1; ldap_id = a@b.c; }
+}
 END
 
 $out = <<'END';
-Syntax error: Domain name expected at line 1 of STDIN, near "cert_id = <--HERE-->@b.c"
+Error: Domain name expected in attribute 'cert_id' of network:n
 END
 
 test_err($title, $in, $out);
@@ -806,21 +823,37 @@ END
 $out = <<'END';
 Error: Missing IP address in nat:n of network:n1
 Error: Missing IP address for network:n1
-Warning: nat:n is defined, but not bound to any interface
 END
 
 test_err($title, $in, $out);
 
 ############################################################
-$title = "Bad radius attribute";
+$title = "Ignoring radius attribute";
 ############################################################
 
 $in = <<'END';
-network:n1 = { ip = 10.1.1.0/24; radius_attributes = { a = ; } }
+network:n1 = { ip = 10.1.1.0/24; radius_attributes = { a = b; } }
 END
 
 $out = <<'END';
-Syntax error: String expected at line 1 of STDIN, near "a = <--HERE-->; } }"
+Warning: Ignoring 'radius_attributes' at network:n1
+END
+
+test_warn($title, $in, $out);
+
+############################################################
+$title = "Bad identifier in radius attribute";
+############################################################
+
+$in = <<'END';
+network:n1 = {
+ ip = 10.1.1.0/24; radius_attributes = { a.1 = 1; }
+ host:id:a@b.c = { ip = 10.1.1.1; }
+}
+END
+
+$out = <<'END';
+Error: Invalid identifier 'a.1' in radius_attributes of network:n1
 END
 
 test_err($title, $in, $out);
@@ -852,7 +885,6 @@ END
 
 $out = <<'END';
 Error: Unexpected attribute in nat:n of network:n: xyz
-Warning: nat:n is defined, but not bound to any interface
 END
 
 test_err($title, $in, $out);
@@ -956,7 +988,8 @@ router:r = {
 END
 
 $out = <<'END';
-Error: Attribute 'subnet_of' is only valid for loopback interface at line 6 of STDIN
+Error: Attribute 'subnet_of' must not be used at interface:r.n
+ It is only valid together with attribute 'loopback'
 END
 
 test_err($title, $in, $out);
@@ -966,25 +999,14 @@ $title = 'Unexpected token in aggregate';
 ############################################################
 
 $in = <<'END';
-any:n = { xyz; }
+any:n = { xyz; x:yz; link = network:n1; }
+network:n1 = { ip = 10.1.2.0/24; }
+
 END
 
 $out = <<'END';
-Syntax error: Unexpected token at line 1 of STDIN, near "xyz<--HERE-->; }"
-END
-
-test_err($title, $in, $out);
-
-############################################################
-$title = 'Unexpected typed name in aggregate';
-############################################################
-
-$in = <<'END';
-any:n = { x:yz; }
-END
-
-$out = <<'END';
-Syntax error: Unexpected token at line 1 of STDIN, near "x:yz<--HERE-->; }"
+Error: Unexpected attribute in any:n: xyz
+Error: Unexpected attribute in any:n: x:yz
 END
 
 test_err($title, $in, $out);
@@ -995,16 +1017,17 @@ $title = "Aggregate without attribute 'link'";
 
 $in = <<'END';
 any:n = { }
+network:n1 = { ip = 10.1.2.0/24; }
 END
 
 $out = <<'END';
-Syntax error: Attribute 'link' must be defined for any:n at line 1 of STDIN, near "any:n = { }<--HERE-->"
+Error: Attribute 'link' must be defined for any:n
 END
 
 test_err($title, $in, $out);
 
 ############################################################
-$title = "Invalid atttribute at aggregate with IP";
+$title = "Invalid attribute at aggregate with IP";
 ############################################################
 
 $in = <<'END';
@@ -1023,7 +1046,7 @@ END
 test_err($title, $in, $out);
 
 ############################################################
-$title = "Valid atttribute at aggregate with IP 0.0.0.0";
+$title = "Valid attribute at aggregate with IP 0.0.0.0";
 ############################################################
 
 $in = <<'END';
@@ -1055,7 +1078,7 @@ network:n = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Syntax error: Unexpected attribute at line 3 of STDIN, near "xyz<--HERE-->; }"
+Error: Unexpected attribute in router_attributes of area:n: xyz
 END
 
 test_err($title, $in, $out);
@@ -1065,25 +1088,13 @@ $title = 'Unexpected token in area';
 ############################################################
 
 $in = <<'END';
-area:n = { xyz; }
+area:n = { xyz; anchor = network:n; x:yz; }
+network:n = { ip = 10.1.1.0/24; }
 END
 
 $out = <<'END';
-Syntax error: Unexpected token at line 1 of STDIN, near "xyz<--HERE-->; }"
-END
-
-test_err($title, $in, $out);
-
-############################################################
-$title = 'Unexpected typed name in area';
-############################################################
-
-$in = <<'END';
-area:n = { x:yz; }
-END
-
-$out = <<'END';
-Syntax error: Unexpected token at line 1 of STDIN, near "x:yz<--HERE-->; }"
+Error: Unexpected attribute in area:n: xyz
+Error: Unexpected attribute in area:n: x:yz
 END
 
 test_err($title, $in, $out);
@@ -1108,10 +1119,12 @@ $title = 'Unexpected token in owner';
 
 $in = <<'END';
 owner:o = { xyz; }
+network:n1 = { ip = 10.1.1.0/24; owner = o; }
 END
 
 $out = <<'END';
 Error: Unexpected attribute in owner:o: xyz
+Error: Missing attribute 'admins' in owner:o of network:n1
 END
 
 test_err($title, $in, $out);
@@ -1146,7 +1159,7 @@ service:s = {
 END
 
 $out = <<'END';
-Error: The sub-expressions of union in src of service:s equally must
+Error: The sub-expressions of union in 'src' of service:s equally must
  either reference 'user' or must not reference 'user'
 END
 
@@ -1167,7 +1180,7 @@ service:s1 = {
 END
 
 $out = <<'END';
-Error: The sub-expressions of union in dst of service:s1 equally must
+Error: The sub-expressions of union in 'dst' of service:s1 equally must
  either reference 'user' or must not reference 'user'
 END
 
@@ -1177,7 +1190,7 @@ test_err($title, $in, $out);
 $title = "Invalid attribute at service";
 ############################################################
 
-$in = <<'END';
+$in = $topo . <<'END';
 service:s1 = {
  xyz;
  user = network:n1;
@@ -1186,7 +1199,7 @@ service:s1 = {
 END
 
 $out = <<'END';
-Syntax error: Expected some valid attribute or definition of 'user' at line 2 of STDIN, near "xyz<--HERE-->;"
+Error: Unexpected attribute in service:s1: xyz
 END
 
 test_err($title, $in, $out);
@@ -1220,7 +1233,7 @@ service:s1 = {
 END
 
 $out = <<'END';
-Warning: Rule of service:s1 should reference 'user' in 'src' and 'dst'
+Warning: Each rule of service:s1 should reference 'user' in 'src' and 'dst'
  because service has keyword 'foreach'
 -- r
 ! n1_in

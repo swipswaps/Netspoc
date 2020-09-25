@@ -14,6 +14,7 @@ $title = "Owner at unmanaged router";
 ############################################################
 
 $in = <<'END';
+owner:o = { admins = a@example.com; }
 router:r = {
  owner = o;
  interface:n1 = { ip = 10.1.1.1; }
@@ -23,6 +24,7 @@ END
 
 $out = <<'END';
 Warning: Ignoring attribute 'owner' at unmanaged router:r
+Warning: Unused owner:o
 END
 
 test_warn($title, $in, $out);
@@ -60,7 +62,6 @@ END
 
 $out = <<'END';
 Error: Bridged interfaces must not be used at unmanged router:bridge
-Error: network:n1/right and network:n1/left have identical IP/mask in any:[network:n1/left]
 END
 
 test_err($title, $in, $out);

@@ -267,7 +267,7 @@ func propagateOwners() {
 	// Propagate owner of loopback interface to loopback network and
 	// loopback zone. Even reset owners to undef, if loopback interface
 	// has no owner.
-	for _, r := range routers {
+	for _, r := range getIpv4Ipv6Routers() {
 		for _, intf := range r.interfaces {
 			if !intf.loopback {
 				continue

@@ -8,13 +8,13 @@ import (
 func CheckUnusedGroups() {
 	if printType := conf.Conf.CheckUnusedGroups; printType != "" {
 		// Check groups
-		names := make([]string, 0, len(groups))
-		for name := range groups {
+		names := make([]string, 0, len(symTable.group))
+		for name := range symTable.group {
 			names = append(names, name)
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			group := groups[name]
+			group := symTable.group[name]
 			if !group.isUsed {
 				warnOrErrMsg(printType, "unused "+group.name)
 			}
@@ -47,5 +47,5 @@ func CheckUnusedGroups() {
 	}
 
 	// Not used any longer; free memory.
-	groups = nil
+	symTable.group = nil
 }

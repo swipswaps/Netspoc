@@ -397,9 +397,9 @@ func expandGroup1(list []ast.Element, ctx string, ipv6,
 				selector := x.Extension
 				var r *router
 				if ipv6 {
-					r = routers6[x.Router]
+					r = symTable.router6[x.Router]
 				} else {
-					r = routers[x.Router]
+					r = symTable.router[x.Router]
 				}
 				if r != nil {
 					if selector == "all" {
@@ -421,7 +421,7 @@ func expandGroup1(list []ast.Element, ctx string, ipv6,
 				if e := x.Extension; e != "" {
 					name += "." + e
 				}
-				if intf, _ := interfaces[name]; intf != nil {
+				if intf, found := symTable.routerIntf[name]; found {
 					if !intf.disabled {
 						result.push(intf)
 					}
@@ -429,8 +429,8 @@ func expandGroup1(list []ast.Element, ctx string, ipv6,
 					errMsg("Can't resolve %s:%s in %s", x.Type, name, ctx)
 				}
 			}
-		case *ast.SimpleAuto, *ast.AggAuto:
-			subObjects := expandGroup1(list,
+		case ast.AutoElem:
+			subObjects := expandGroup1(x.GetElements(),
 				x.GetType()+":[..] of "+ctx, ipv6, false, false)
 			for _, obj := range subObjects {
 				obj.setUsed()
@@ -550,7 +550,7 @@ func expandGroup1(list []ast.Element, ctx string, ipv6,
 						errMsg("Unexpected '%s' in host:[..] of %s", obj, ctx)
 					}
 				}
-			case "network:":
+			case "network":
 
 				// Ignore duplicate networks resulting from different
 				// interfaces connected to the same network.
@@ -652,9 +652,14 @@ func expandGroup1(list []ast.Element, ctx string, ipv6,
 					// Group has not been converted from names to references.
 
 					// Mark group as used.
-					grp.setUsed()
+					grp.isUsed = true
 
 					ctx := typ + ":" + name
+
+					// 'user' must not be referenced in group.
+					user := userObj.elements
+					userObj.elements = nil
+					defer func() { userObj.elements = user }()
 
 					// Add marker for detection of recursive group definition.
 					grp.recursive = true

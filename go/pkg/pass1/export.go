@@ -431,8 +431,6 @@ func normalizeServicesForExport() []*exportedSvc {
 		sname := s.name
 		ctx := sname
 		user := expandGroup(s.user, "user of "+ctx, ipv6, false)
-		userObj.elements = user
-		defer func() { userObj.elements = nil }()
 		foreach := s.foreach
 
 		type tmpRule struct {
@@ -464,7 +462,7 @@ func normalizeServicesForExport() []*exportedSvc {
 			hasUser := uRule.hasUser
 
 			process := func(elt groupObjList) {
-				srcDstListPairs := normalizeSrcDstList(uRule, s)
+				srcDstListPairs := normalizeSrcDstList(uRule, elt, s)
 				for _, srcDstList := range srcDstListPairs {
 					srcList, dstList := srcDstList[0], srcDstList[1]
 
@@ -678,7 +676,7 @@ func setupPartOwners() xOwner {
 	// Don't handle interfaces here, because
 	// - unmanaged interface doesn't have owner and
 	// - managed interface isn't part of network.
-	for _, n := range networks {
+	for _, n := range symTable.network {
 		if n.disabled {
 			continue
 		}
@@ -692,7 +690,7 @@ func setupPartOwners() xOwner {
 	}
 
 	// Add owner and partOwner of network to enclosing aggregates and networks.
-	for _, n := range networks {
+	for _, n := range symTable.network {
 		if n.disabled {
 			continue
 		}
@@ -914,7 +912,7 @@ func exportNatSet(dir string,
 
 	diag.Progress("Export NAT-sets")
 	owner2domains := make(map[string]map[*natDomain]bool)
-	for _, n := range networks {
+	for _, n := range symTable.network {
 		if n.disabled {
 			continue
 		}

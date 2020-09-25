@@ -102,7 +102,7 @@ import (
 // Print IP address of obj in context of natSet.
 func printAddress(obj groupObj, ns natSet) string {
 	netAddr := func(n *network) string {
-		return prefixCode(net.IPNet{IP: n.ip, Mask: n.mask})
+		return prefixCode(&net.IPNet{IP: n.ip, Mask: n.mask})
 	}
 	dynamicAddr := func(m map[string]net.IP, n *network) string {
 		tag := n.natTag
@@ -231,7 +231,7 @@ func PrintGroup() {
 	var natSet natSet
 	if natNet != "" {
 		natNet = strings.TrimPrefix(natNet, "network:")
-		if net := networks[natNet]; net != nil {
+		if net := symTable.network[natNet]; net != nil {
 			natSet = net.zone.natDomain.natSet
 		} else {
 			abort.Msg("Unknown network:%s of option '-nat'", natNet)

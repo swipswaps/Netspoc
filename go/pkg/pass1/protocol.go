@@ -1,56 +1,5 @@
 package pass1
 
-/*
-func expandProtocols(list stringList, ctx string) []*proto {
-	result := make(protoList, 0)
-	for _, v := range list {
-
-		// Handle anonymous protocol.
-		result.push(p)
-
-			typ, name := p[0], p[1]
-			switch typ {
-			case "protocol":
-				if prt, ok := protocols[name]; ok {
-					result.push(prt)
-
-					// Currently needed by external program 'cut-netspoc'.
-					prt.isUsed = true
-				} else {
-					errMsg("Can't resolve reference to %s:%s in %s",
-						typ, name, ctx)
-				}
-			case "protocolgroup":
-				if prtgroup, ok := protocolGroups[name]; ok {
-					if prtgroup.recursive {
-						errMsg("Found recursion in definition of %s", ctx)
-						prtgroup.elements = nil
-
-						// Check if it has already been converted
-						// from names to references.
-					} else if !prtgroup.isUsed {
-						prtgroup.isUsed = true
-
-						// Detect recursive definitions.
-						prtgroup.recursive = true
-						prtgroup.elements =
-							expandProtocols(prtgroup.list, typ+":"+name)
-						prtgroup.recursive = false
-					}
-					result = append(result, prtgroup.elements...)
-				} else {
-					errMsg("Can't resolve reference to %s:%s in %s",
-						typ, name, ctx)
-				}
-			default:
-				errMsg("Unknown type of %s:%s in %s",
-					typ, name, ctx)
-			}
-		}
-	}
-	return result
-}
-*/
 func expandSplitProtocol(p *proto) protoList {
 
 	// Handle unset srcRange.

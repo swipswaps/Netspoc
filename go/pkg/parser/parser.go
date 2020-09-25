@@ -38,7 +38,7 @@ func (p *parser) next() {
 	p.pos, p.isSep, p.tok = p.scanner.Token()
 }
 
-// Advance to the next token, but take "-" and ":" as separator.
+// Advance to the next token, but take "-", "/" and ":" as separator.
 func (p *parser) nextRange() {
 	p.pos, p.isSep, p.tok = p.scanner.RangeToken()
 }
@@ -108,8 +108,12 @@ func (p *parser) checkPos(tok string) int {
 
 func (p *parser) getNonSep() string {
 	if p.isSep {
-		p.syntaxErr("Unexpected separator '%s'", p.tok)
-		// ToDo: What happens if at EOF?
+		if p.tok == "" {
+			// At EOF
+			p.syntaxErr("Expected something")
+		} else {
+			p.syntaxErr("Unexpected separator '%s'", p.tok)
+		}
 	}
 	return p.tok
 }

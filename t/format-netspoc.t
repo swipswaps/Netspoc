@@ -950,11 +950,12 @@ service:s1 = {
         dst = network:n2;
         prt = tcp 80, tcp 700, udp 70, tcp 55-59, tcp 20:1024-65535,
               tcp 54 : 64-74,
-              tcp 20 : 64-74,
+              tcp 20 : 64- 74,
               udp 123,
-              icmp 3 3,
-              icmp 4 3,
-              icmp 3 4,
+              icmp 3/3,
+              icmp 4 / 3,
+              icmp 3 /4,
+              icmp 8,
               proto 43,
               proto 54,
               protocol:smtp, protocol:ftp,
@@ -971,9 +972,10 @@ service:s1 = {
         prt = protocolgroup:ftp-active,
               protocol:ftp,
               protocol:smtp,
-              icmp 3 3,
-              icmp 3 4,
-              icmp 4 3,
+              icmp 3 / 3,
+              icmp 3 / 4,
+              icmp 4 / 3,
+              icmp 8,
               proto 43,
               proto 54,
               tcp 55 - 59,
@@ -1296,7 +1298,7 @@ protocol:BGP = tcp 179, no_check_supernet_rules;
 protocol:all_ip = # trailing
  ip;
 protocol:all_icmp =
- description = icmp with any typa and code
+ description = icmp with any typ and code
  icmp;
 END
 
@@ -1309,7 +1311,7 @@ protocol:all_ip = # trailing
  ip;
 
 protocol:all_icmp =
- description = icmp with any typa and code
+ description = icmp with any typ and code
 
  icmp;
 END

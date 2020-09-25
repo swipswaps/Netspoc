@@ -966,7 +966,7 @@ func distributeNatSetsToInterfaces(doms []*natDomain) {
 		for _, z := range d.zones {
 			for _, intf := range z.interfaces {
 				r := intf.router
-				if !(r.managed != "" || r.semiManaged) {
+				if r.managed == "" && !r.semiManaged {
 					continue
 				}
 

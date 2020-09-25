@@ -40,35 +40,6 @@ func (z *zone) nonSecondaryIntfs() []*routerIntf {
 	return result
 }
 
-var (
-	network00 = &network{
-		ipObj: ipObj{
-			name: "network:0/0",
-			ip:   getZeroIp(false),
-		},
-		mask:           getZeroMask(false),
-		isAggregate:    true,
-		hasOtherSubnet: true,
-	}
-	network00v6 = &network{
-		ipObj: ipObj{
-			name: "network:0/0",
-			ip:   getZeroIp(true),
-		},
-		mask:           getZeroMask(true),
-		isAggregate:    true,
-		hasOtherSubnet: true,
-	}
-)
-
-func getNetwork00(ipv6 bool) *network {
-	if ipv6 {
-		return network00v6
-	} else {
-		return network00
-	}
-}
-
 var permitAnyRule, permitAny6Rule *groupedRule
 
 func getPermitAnyRule(ipv6 bool) *groupedRule {
@@ -97,7 +68,7 @@ func printHeader(fh *os.File, router *router, what string) {
 	fmt.Fprintln(fh, commentChar, "[", what, "]")
 }
 
-func iosRouteCode(n net.IPNet) string {
+func iosRouteCode(n *net.IPNet) string {
 	ipCode := n.IP.String()
 	maskCode := net.IP(n.Mask).String()
 	return ipCode + " " + maskCode
@@ -295,7 +266,7 @@ func printRoutes(fh *os.File, router *router) {
 	}
 	sort.Sort(sort.Reverse(sort.IntSlice(prefixes)))
 	type netInfo struct {
-		net.IPNet
+		*net.IPNet
 		noOpt bool
 	}
 	intf2hop2netInfos := make(map[*routerIntf]map[*routerIntf][]netInfo)
@@ -350,7 +321,7 @@ func printRoutes(fh *os.File, router *router) {
 				intf2hop2netInfos[hopInfo.intf] = m
 			}
 			info := netInfo{
-				net.IPNet{IP: ip, Mask: net.CIDRMask(prefix, bitstrLen)},
+				&net.IPNet{IP: ip, Mask: net.CIDRMask(prefix, bitstrLen)},
 				noOpt,
 			}
 			m[hopInfo.hop] = append(m[hopInfo.hop], info)
@@ -389,7 +360,7 @@ func printRoutes(fh *os.File, router *router) {
 			// with supernet behind other hop.
 			hop2nets := intf2hop2netInfos[maxIntf]
 			nets := []netInfo{{
-				net.IPNet{IP: zeroIp, Mask: net.CIDRMask(0, bitstrLen)},
+				&net.IPNet{IP: zeroIp, Mask: net.CIDRMask(0, bitstrLen)},
 				false,
 			}}
 			for _, net := range hop2nets[maxHop] {
@@ -1937,7 +1908,7 @@ func isHostMask(m net.IPMask) bool {
 	return prefix == size
 }
 
-func prefixCode(n net.IPNet) string {
+func prefixCode(n *net.IPNet) string {
 	prefix, size := n.Mask.Size()
 	if prefix == size {
 		return n.IP.String()
@@ -1946,7 +1917,7 @@ func prefixCode(n net.IPNet) string {
 
 }
 
-func fullPrefixCode(n net.IPNet) string {
+func fullPrefixCode(n *net.IPNet) string {
 	prefix, _ := n.Mask.Size()
 	return n.IP.String() + "/" + strconv.Itoa(prefix)
 }

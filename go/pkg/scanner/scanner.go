@@ -151,7 +151,7 @@ func isRangeTokenChar(ch rune) bool {
 		return true
 	}
 	switch ch {
-	case '.', '/', '@':
+	case '.', '@':
 		return true
 	default:
 		return false

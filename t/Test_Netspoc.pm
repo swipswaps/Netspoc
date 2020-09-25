@@ -262,6 +262,9 @@ sub test_err {
     # Cleanup error message.
     $stderr =~ s/\nAborted with \d+ error\(s\)$//ms;
 
+    # Remove 'Usage' message after error message.
+    $stderr =~ s/\nUsage: .*/\n/ms;
+
     # Normalize input path: remove temp. dir.
     $stderr =~ s/\Q$in_dir\E\///g;
 

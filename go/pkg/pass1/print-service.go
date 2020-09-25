@@ -129,7 +129,7 @@ func PrintService() {
 	var natSet natSet
 	if natNet != "" {
 		natNet = strings.TrimPrefix(natNet, "network:")
-		if net := networks[natNet]; net != nil {
+		if net := symTable.network[natNet]; net != nil {
 			natSet = net.zone.natDomain.natSet
 		} else {
 			abort.Msg("Unknown network:%s of option '-n'", natNet)

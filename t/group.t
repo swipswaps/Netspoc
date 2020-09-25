@@ -692,7 +692,7 @@ service:s1 = {
 END
 
 $out = <<'END';
-Error: Can't resolve foo:bar in group:g1
+Syntax error: Unknown element type at line 3 of STDIN, near "group:g1 = --HERE-->foo:bar"
 END
 
 test_err($title, $in, $out);
@@ -713,8 +713,7 @@ service:s1 = {
 END
 
 $out = <<'END';
-Error: Unexpected area:[..] in group:g1
-Error: Unexpected foo:[..] in group:g1
+Syntax error: Unexpected automatic group at line 3 of STDIN, near "group:g1 = --HERE-->area:[network:n]"
 END
 
 test_err($title, $in, $out);
